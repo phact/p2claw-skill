@@ -1,0 +1,85 @@
+# Keep `scripts/install.sh` in sync with the canonical version
+# served at https://p2claw.com/install (sourced from the marketing
+# site's `marketing-site/public/install` in the upstream p2claw repo).
+#
+# How it works:
+#   - On schedule (daily) and on demand, fetch the published script.
+#   - If it differs from `scripts/install.sh`, open a PR with the new
+#     content. Humans review and merge — the bundled script is the
+#     thing the skill ships, so any change deserves an eyeball before
+#     it lands.
+#   - If the published URL is unreachable, the job fails loudly.
+#     Spurious red is preferable to silently missing drift.
+#
+# Manually trigger from the Actions tab if you've just deployed a
+# change to the marketing site and want the skill PR to open
+# immediately rather than waiting for the daily schedule.
+
+name: install-script-sync
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # 09:17 UTC daily — late-arrival catch for any drift introduced
+    # in the past 24 h.
+    - cron: "17 9 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: fetch published install script
+        run: |
+          set -eu
+          curl -fsSL --retry 3 --retry-delay 5 \
+            -o /tmp/published-install \
+            https://p2claw.com/install
+
+      - name: diff bundled vs published
+        id: diff
+        run: |
+          set -eu
+          if diff -q p2claw/scripts/install.sh /tmp/published-install >/dev/null 2>&1; then
+            echo "in-sync=true" >> "$GITHUB_OUTPUT"
+            echo "p2claw/scripts/install.sh matches https://p2claw.com/install — nothing to do"
+          else
+            echo "in-sync=false" >> "$GITHUB_OUTPUT"
+            echo "p2claw/scripts/install.sh differs from published — will open a PR"
+            diff -u p2claw/scripts/install.sh /tmp/published-install || true
+            cp /tmp/published-install p2claw/scripts/install.sh
+            chmod +x p2claw/scripts/install.sh
+          fi
+
+      - name: open sync PR
+        if: steps.diff.outputs.in-sync == 'false'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          # Default GITHUB_TOKEN is fine here — the workflow needs
+          # `contents: write` (push branch) + `pull-requests: write`
+          # (open the PR), both granted in the top-level `permissions`
+          # block above.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: sync-install-script
+          commit-message: "sync p2claw/scripts/install.sh from p2claw.com/install"
+          title: "sync p2claw/scripts/install.sh from p2claw.com/install"
+          body: |
+            Drift detected: `p2claw/scripts/install.sh` does not match
+            the canonical `https://p2claw.com/install` served by the
+            marketing site. This PR pulls the published version in.
+
+            Review the diff carefully — the bundled script is what
+            this skill runs to install the `p2claw` binary on a
+            user's machine, so any change deserves a human read.
+
+            Once merged, future agent invocations of the skill will
+            run the updated installer.
+          labels: |
+            sync
+            automated
+          delete-branch: true
