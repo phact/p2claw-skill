@@ -53,6 +53,61 @@ Do **not** use it for:
 
 ---
 
+## Security: you are publishing this app to the internet
+
+This is the part most users underestimate, so be explicit about it
+before you run `expose`.
+
+A p2claw URL is **a public URL**. Anyone who has the link — or guesses
+it, or finds it in a screenshot, browser history, scan log, or shared
+chat — can reach the upstream from anywhere on the internet. There is
+no IP allowlist, no auth in front of it, and no obscurity guarantee
+from the haiku alias. Exposing `127.0.0.1:5173` via p2claw is, from a
+threat-model standpoint, the same as binding that port to `0.0.0.0`
+and forwarding it through the user's router.
+
+Before calling `p2claw expose`, **state this to the user in plain
+language and confirm they want to proceed**, especially if any of
+these apply:
+
+- The upstream is a dev server running with debug mode, hot-reload,
+  source maps, or a `/__debug__`-style route enabled (Flask debug,
+  Rails dev mode, Vite, Next.js dev, Django runserver, Jupyter,
+  Streamlit, RStudio, etc.). These are **not safe to expose** — they
+  often allow arbitrary code execution by design.
+- The app reads or writes files on the user's machine, has a shell /
+  REPL / "run code" surface, or wraps an LLM with tool use. A public
+  URL gives strangers that capability.
+- The app talks to a database, API key, cloud account, or any
+  credential pulled from the user's environment. Exposing the app
+  exposes whatever it can do with those creds.
+- The app has no authentication, or has authentication you haven't
+  verified is actually wired up on every route.
+- The upstream is *someone else's* software — a checked-out
+  open-source project, a vendored binary, a `docker run` of an image
+  off Docker Hub. **Do not expose third-party software with known
+  CVEs or unpatched versions.** If you don't know the security
+  posture of what's listening on that port, say so.
+
+If the user wants to share something genuinely private, p2claw is the
+wrong tool — recommend a tunnel with auth in front (cloudflared with
+Access, tailscale funnel with ACLs) or just AirDrop/screen-share.
+
+When in doubt, **ask before exposing**. The cost of a confirmation is
+low; the cost of putting a debug-mode dev server with a database
+connection on the public internet is not.
+
+Operational hygiene to apply by default:
+
+- Pick the port the user just started. Don't expose a port whose
+  owner you can't identify (`lsof -iTCP:<port> -sTCP:LISTEN` if
+  unsure).
+- Don't expose `0.0.0.0`-bound services without a reason — p2claw's
+  `non_loopback_upstream` check is a feature, not an obstacle to
+  route around.
+
+---
+
 ## Prerequisites
 
 The skill assumes a Bash/POSIX shell (`Bash` tool). macOS and Linux
@@ -300,7 +355,3 @@ User: "Make a quick recipes app and share it with my partner."
 6. Tell the user the URL is live as long as their box is on. If they
    want it to keep working after a reboot, install as a service (§
    "Starting the daemon" Option A).
-
-That's it. The skill is intentionally small — one binary, four
-verbs (`run` / `expose` / `unexpose` / `routes`), one identity, one
-service-install command.
