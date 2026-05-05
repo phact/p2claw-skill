@@ -187,11 +187,15 @@ cat <<EOF
 
 ${GRN}p2claw $VERSION ready.${RST}
 
-Try it:
+Recommended next:
 
-  ${BLD}$BIN_NAME identity${RST}        # show your peer_id + alias (offline; first run creates the keypair)
-  ${BLD}$BIN_NAME run${RST}             # start the daemon (registers with coord, holds the control connection)
-  ${BLD}$BIN_NAME expose <name> <port>${RST}   # publish a localhost upstream as a peer URL
+  ${BLD}$BIN_NAME service install${RST}              # always-on user-scope service (no sudo)
+  ${BLD}$BIN_NAME expose <name> <port>${RST}     # publish a localhost upstream as a peer URL
+
+Alternatives:
+
+  ${BLD}$BIN_NAME run${RST}                          # foreground daemon (one-off sharing)
+  ${BLD}$BIN_NAME service install --help${RST}       # --system adds MagicDNS for direct-P2P box-to-box
 
 Docs and skill setup: ${DIM}https://github.com/$REPO${RST}
 EOF
