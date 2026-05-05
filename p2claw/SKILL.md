@@ -219,6 +219,31 @@ If the daemon is already running (whether via launchd or foreground),
 **do nothing**. Two daemons can't share the local-API socket — a
 second one will fail to start.
 
+### Box-to-box: dialing other peers from this machine
+
+`curl https://app-<other>.<parent>/` from this box works on either
+A or B out of the box. The traffic takes the public path: public
+DNS → edge → tunnel → other peer. Edge sees plaintext during
+forwarding, and the bytes go through edge bandwidth.
+
+For direct P2P instead — same URL, resolves locally to
+`127.0.0.1`, hits the agent's SNI listener, dials the other peer
+via iroh, end-to-end encrypted, no edge involvement — install at
+system scope:
+
+```bash
+sudo p2claw service install --system
+```
+
+Adds MagicDNS: `/etc/resolver/<parent>`, a CA root in the OS trust
+store, an SNI listener at `127.0.0.1:443`. Runs as LaunchDaemon
+(macOS) or system-systemd unit (Linux). **Confirm with the user
+before running** — sudo, root-owned files. `--dry-run` previews.
+
+`--no-magicdns` (either scope) skips the privileged scaffolding;
+outbound still works via the edge tunnel, just without the direct
+P2P fast path. Inbound is unaffected either way.
+
 ---
 
 ## Exposing an app
@@ -325,6 +350,40 @@ If `alias: <unregistered>` shows up, the agent has never successfully
 registered. Restart it (`p2claw run` or relaunch the service) and
 check the logs at `~/Library/Logs/p2claw.log` (macOS) or `journalctl
 --user -u p2claw-agent.service` (Linux).
+
+---
+
+## Upgrades
+
+The agent daemon polls the upgrade manifest **hourly** under its
+supervisor and applies new releases automatically — fetch, SHA-256
+verify, atomic-swap, supervised restart. On by default.
+
+The one manual action worth knowing is **pulling the latest right
+now** instead of waiting for the next poll:
+
+```bash
+p2claw upgrade --apply       # fetch + verify + swap + restart now
+```
+
+The agent restarts as part of `--apply`, which briefly blips active
+control connections.
+
+Rarer knobs:
+
+```bash
+p2claw upgrade --status      # pin + disabled state (no network)
+p2claw upgrade --check       # would the next poll upgrade? (read-only)
+p2claw upgrade --pin <ver>   # pin to a SemVer (e.g. reproducing a bug)
+p2claw upgrade --unpin       # resume normal flow
+p2claw upgrade --disable     # kill switch; persists across reboots
+p2claw upgrade --enable      # re-arm
+```
+
+Pin and disable state live in the agent data dir as
+`upgrade-pin.json` and `upgrade-disabled`
+(`~/Library/Application Support/p2claw/` on macOS,
+`~/.local/share/p2claw/` on Linux).
 
 ---
 
