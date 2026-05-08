@@ -7,7 +7,7 @@ description: |
   someone else (or use it on their phone) without deploying to a
   cloud, signing up for a service, or opening a port through their
   router.
-license: Apache-2.0
+license: MIT-0
 ---
 
 # p2claw
