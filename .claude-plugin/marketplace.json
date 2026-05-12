@@ -4,11 +4,12 @@
   "description": "Skills for sharing locally-built apps as peer-to-peer URLs via the p2claw agent.",
   "version": "0.1.0",
   "repository": "https://github.com/phact/p2claw-skill",
-  "license": "Apache-2.0",
+  "license": "MIT-0",
   "plugins": [
     {
       "name": "p2claw",
       "source": "./p2claw",
+      "strict": false,
       "description": "Publishes apps you've built locally as peer-to-peer URLs anyone can open in a browser.",
       "version": "0.1.0",
       "author": { "name": "phact" },
