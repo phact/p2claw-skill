@@ -51,6 +51,18 @@ Do **not** use it for:
   contractual SLAs. p2claw routes through your box; it isn't a
   CDN.
 
+### Cloud Run muscle memory
+
+For users with `gcloud run deploy` ergonomics in mind, the skill
+also bundles a `p2claw-run` CLI that mirrors `gcloud run deploy`
+flags — swap the binary name and an existing Cloud Run container
+runs locally over p2claw unchanged. Reach for it when the user has
+a Cloud Run image or a Dockerfile + source directory and says "run
+my Cloud Run container locally" or "I want gcloud-run-deploy
+ergonomics." See `references/cloud-run-compat.md` for the full flag
+mapping and what isn't replicated (autoscaling, IAM, custom
+domains, Secret Manager, VPC).
+
 ---
 
 ## Security: you are publishing this app to the internet

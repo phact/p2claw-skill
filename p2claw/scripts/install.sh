@@ -165,6 +165,24 @@ mv "$SRC" "$DEST"
 chmod +x "$DEST"
 ok "installed $DEST"
 
+# ---------- Cloud Run-compat shim (optional, skill-bundled only) -----
+# If this installer was run from the skill directory (sibling
+# `p2claw-run` present), drop a Cloud-Run-compatible deploy CLI next
+# to the main binary. When the script is piped from curl there's no
+# sibling on disk and this step is a no-op.
+SHIM_SRC=""
+if [ -n "${0:-}" ] && [ -f "$0" ]; then
+  SHIM_SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
+  if [ -f "$SHIM_SRC_DIR/p2claw-run" ]; then
+    SHIM_SRC="$SHIM_SRC_DIR/p2claw-run"
+  fi
+fi
+if [ -n "$SHIM_SRC" ]; then
+  cp "$SHIM_SRC" "$INSTALL_DIR/p2claw-run"
+  chmod +x "$INSTALL_DIR/p2claw-run"
+  ok "installed $INSTALL_DIR/p2claw-run (Cloud Run-compat shim)"
+fi
+
 # ---------- PATH hint -------------------------------------------------
 case ":${PATH-}:" in
   *":$INSTALL_DIR:"*) ;;

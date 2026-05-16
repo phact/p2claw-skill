@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# p2claw-run — gcloud-run-compatible local deploy CLI.
+#
+# Mirrors `gcloud run deploy` flags so existing Cloud Run containers
+# can run locally over p2claw unchanged. Runs the container on a
+# free localhost port, health-checks it, registers a p2claw route,
+# and prints the URL.
+#
+# Supported:
+#   p2claw-run deploy NAME (--image IMAGE | --source PATH) [...]
+#   p2claw-run services list
+#   p2claw-run services describe NAME
+#   p2claw-run services delete NAME
+#
+# See references/cloud-run-compat.md (in the skill) for the full
+# gcloud → p2claw-run mapping and what isn't replicated.
+
+set -euo pipefail
+
+# ---------- ANSI helpers ----------------------------------------------
+if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
+  RED=$(printf '\033[31m'); YEL=$(printf '\033[33m'); GRN=$(printf '\033[32m')
+  BLD=$(printf '\033[1m'); DIM=$(printf '\033[2m'); RST=$(printf '\033[0m')
+else
+  RED=; YEL=; GRN=; BLD=; DIM=; RST=
+fi
+
+say()  { printf '%s→%s %s\n'  "$DIM" "$RST" "$*"; }
+ok()   { printf '%s✓%s %s\n'  "$GRN" "$RST" "$*"; }
+warn() { printf '%swarn:%s %s\n' "$YEL" "$RST" "$*" >&2; }
+err()  { printf '%serror:%s %s\n' "$RED" "$RST" "$*" >&2; exit 1; }
+
+require() {
+  command -v "$1" >/dev/null 2>&1 || err "missing dependency: $1"
+}
+
+# ---------- usage -----------------------------------------------------
+usage() {
+  cat <<EOF
+Usage:
+  p2claw-run deploy NAME (--image IMAGE | --source PATH) [OPTIONS]
+  p2claw-run services list
+  p2claw-run services describe NAME
+  p2claw-run services delete NAME
+
+A gcloud-run-compatible local deploy CLI: swap the binary name and
+run an existing \`gcloud run deploy ...\` invocation against p2claw.
+
+Deploy options:
+  --image IMAGE                 Run an existing image.
+  --source PATH                 Build from source (Dockerfile, else
+                                buildpacks via 'pack').
+  --port PORT                   Container port (default 8080,
+                                injected as \$PORT).
+  --set-env-vars K=V,...        Comma-separated env vars.
+  --env-vars-file FILE          Docker env-file forwarded to the
+                                container.
+
+Cloud-Run-compat no-op flags (accepted, ignored):
+  --region, --allow-unauthenticated, --platform
+
+See references/cloud-run-compat.md (in the skill repo) for the
+gcloud → p2claw-run mapping and what this mode doesn't replicate
+(autoscaling, IAM, custom domains, Secret Manager, VPC, …).
+EOF
+}
+
+# ---------- port allocation -------------------------------------------
+free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(('127.0.0.1', 0))
+print(s.getsockname()[1])
+s.close()
+PY
+}
+
+# ---------- image build -----------------------------------------------
+build_from_source() {
+  local path="$1" tag="$2"
+  [ -d "$path" ] || err "source path not found: $path"
+  if [ -f "$path/Dockerfile" ]; then
+    say "building ${BLD}$tag${RST} from ${BLD}$path/Dockerfile${RST}"
+    docker build -t "$tag" "$path" >&2
+  else
+    command -v pack >/dev/null 2>&1 \
+      || err "no Dockerfile in $path and 'pack' (Buildpacks CLI) not installed. Install pack or add a Dockerfile."
+    say "building ${BLD}$tag${RST} from ${BLD}$path${RST} via Buildpacks"
+    pack build "$tag" --path "$path" --builder gcr.io/buildpacks/builder:latest >&2
+  fi
+}
+
+# ---------- deploy ----------------------------------------------------
+do_deploy() {
+  local name="${1:-}"; shift || true
+  [ -n "$name" ] && [[ "$name" != --* ]] || err "deploy requires a service NAME (e.g. 'p2claw-run deploy myapp --image ...')"
+
+  local image="" source_path="" port=8080 env_file=""
+  local env_args=()
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --image)                   image="${2:-}"; shift 2 ;;
+      --image=*)                 image="${1#*=}"; shift ;;
+      --source)                  source_path="${2:-}"; shift 2 ;;
+      --source=*)                source_path="${1#*=}"; shift ;;
+      --port)                    port="${2:-}"; shift 2 ;;
+      --port=*)                  port="${1#*=}"; shift ;;
+      --set-env-vars)
+        IFS=',' read -ra _kvs <<<"${2:-}"
+        for _kv in "${_kvs[@]}"; do env_args+=( -e "$_kv" ); done
+        shift 2 ;;
+      --set-env-vars=*)
+        IFS=',' read -ra _kvs <<<"${1#*=}"
+        for _kv in "${_kvs[@]}"; do env_args+=( -e "$_kv" ); done
+        shift ;;
+      --env-vars-file)           env_file="${2:-}"; shift 2 ;;
+      --env-vars-file=*)         env_file="${1#*=}"; shift ;;
+
+      # Cloud Run no-op flags (accepted for muscle memory)
+      --region|--platform)       shift 2 ;;
+      --region=*|--platform=*)   shift ;;
+      --allow-unauthenticated)   shift ;;
+
+      -h|--help)                 usage; exit 0 ;;
+      *) err "unknown flag: $1 (try --help)" ;;
+    esac
+  done
+
+  [ -n "$image" ] || [ -n "$source_path" ] \
+    || err "deploy requires --image IMAGE or --source PATH"
+  [ -z "$image" ] || [ -z "$source_path" ] \
+    || err "specify --image or --source, not both"
+
+  require docker
+  require curl
+  require python3
+  require p2claw
+
+  # Build if --source
+  if [ -n "$source_path" ]; then
+    image="p2claw-run/${name}:latest"
+    build_from_source "$source_path" "$image"
+  fi
+
+  # Replace any existing container with this name
+  local container="p2claw-run-${name}"
+  if docker ps -a --format '{{.Names}}' | grep -qx "$container"; then
+    say "replacing existing container $container"
+    docker rm -f "$container" >/dev/null
+  fi
+
+  # Pick a free host port
+  local host_port; host_port="$(free_port)"
+
+  # Build docker run args
+  local docker_args=(
+    -d
+    --name "$container"
+    --label p2claw-run=true
+    --label "p2claw-run.service=$name"
+    --label "p2claw-run.image=$image"
+    --label "p2claw-run.host-port=$host_port"
+    --label "p2claw-run.container-port=$port"
+    -p "127.0.0.1:${host_port}:${port}"
+    -e "PORT=${port}"
+  )
+  if [ ${#env_args[@]} -gt 0 ]; then
+    docker_args+=( "${env_args[@]}" )
+  fi
+  if [ -n "$env_file" ]; then
+    [ -f "$env_file" ] || err "env-vars-file not found: $env_file"
+    docker_args+=( --env-file "$env_file" )
+  fi
+  docker_args+=( "$image" )
+
+  say "starting ${BLD}$image${RST} on 127.0.0.1:${host_port} (container :${port})"
+  docker run "${docker_args[@]}" >/dev/null
+
+  # Health-check: any HTTP response within 60s = up
+  say "waiting for upstream to answer"
+  local deadline=$(( $(date +%s) + 60 )) ready=0
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    local running
+    running="$(docker inspect "$container" --format '{{.State.Running}}' 2>/dev/null || echo false)"
+    if [ "$running" != "true" ]; then
+      printf '%scontainer exited before becoming healthy. last logs:%s\n' "$RED" "$RST" >&2
+      docker logs "$container" 2>&1 | tail -20 >&2 || true
+      docker rm -f "$container" >/dev/null 2>&1 || true
+      exit 1
+    fi
+    if curl -sS -o /dev/null --max-time 3 "http://127.0.0.1:${host_port}/" 2>/dev/null; then
+      ready=1; break
+    fi
+    sleep 1
+  done
+  if [ "$ready" -ne 1 ]; then
+    warn "upstream did not respond within 60s; the container is still running so registering anyway"
+  fi
+
+  # Register the route with the p2claw daemon
+  say "registering route ${BLD}$name${RST} → 127.0.0.1:${host_port}"
+  local url=""
+  if url="$(p2claw expose "$name" "$host_port" --json --no-qr 2>/dev/null \
+             | python3 -c 'import sys,json; print(json.load(sys.stdin)["url"])' 2>/dev/null)" \
+     && [ -n "$url" ]; then
+    ok "Service ${BLD}$name${RST} is live at ${BLD}$url${RST}"
+  else
+    # Fall back to the human-readable form (also prints the QR)
+    p2claw expose "$name" "$host_port"
+  fi
+}
+
+# ---------- services list / describe / delete -------------------------
+do_services_list() {
+  require docker
+  local fmt='{{.Label "p2claw-run.service"}}\t{{.Image}}\t{{.Status}}\t127.0.0.1:{{.Label "p2claw-run.host-port"}}'
+  local rows
+  rows="$(docker ps -a --filter "label=p2claw-run=true" --format "$fmt")"
+  if [ -z "$rows" ]; then
+    printf '%sno p2claw-run services.%s\n' "$DIM" "$RST"
+    return 0
+  fi
+  { printf 'NAME\tIMAGE\tSTATUS\tUPSTREAM\n'; printf '%s\n' "$rows"; } \
+    | column -t -s $'\t'
+}
+
+do_services_describe() {
+  local name="${1:-}"
+  [ -n "$name" ] || err "services describe requires NAME"
+  require docker
+  local container="p2claw-run-${name}"
+  docker inspect "$container" >/dev/null 2>&1 \
+    || err "service '$name' not found (no container '$container')"
+  docker inspect "$container"
+}
+
+do_services_delete() {
+  local name="${1:-}"
+  [ -n "$name" ] || err "services delete requires NAME"
+  require docker
+  local container="p2claw-run-${name}"
+  if docker ps -a --format '{{.Names}}' | grep -qx "$container"; then
+    docker rm -f "$container" >/dev/null
+    ok "removed container $container"
+  else
+    warn "no container '$container' to remove"
+  fi
+  if command -v p2claw >/dev/null 2>&1; then
+    if p2claw unexpose "$name" >/dev/null 2>&1; then
+      ok "removed route '$name'"
+    else
+      warn "route '$name' was not registered (or daemon not running)"
+    fi
+  fi
+}
+
+do_services() {
+  local action="${1:-}"; shift || true
+  case "$action" in
+    list)      do_services_list ;;
+    describe)  do_services_describe "$@" ;;
+    delete|rm) do_services_delete "$@" ;;
+    ""|-h|--help) usage ;;
+    *)         err "unknown services action: $action (try 'list', 'describe', 'delete')" ;;
+  esac
+}
+
+# ---------- top-level dispatch ----------------------------------------
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    deploy)         do_deploy "$@" ;;
+    services)       do_services "$@" ;;
+    ""|-h|--help)   usage ;;
+    -V|--version)   echo "p2claw-run (skill-bundled shim)"; exit 0 ;;
+    *)              err "unknown command: $cmd (try 'deploy', 'services', '--help')" ;;
+  esac
+}
+
+main "$@"
