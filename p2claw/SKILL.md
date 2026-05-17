@@ -51,17 +51,16 @@ Do **not** use it for:
   contractual SLAs. p2claw routes through your box; it isn't a
   CDN.
 
-### Cloud Run muscle memory
+### Cloud Run containers
 
-For users with `gcloud run deploy` ergonomics in mind, the skill
-also bundles a `p2claw-run` CLI that mirrors `gcloud run deploy`
-flags — swap the binary name and an existing Cloud Run container
-runs locally over p2claw unchanged. Reach for it when the user has
-a Cloud Run image or a Dockerfile + source directory and says "run
-my Cloud Run container locally" or "I want gcloud-run-deploy
-ergonomics." See `references/cloud-run-compat.md` for the full flag
-mapping and what isn't replicated (autoscaling, IAM, custom
-domains, Secret Manager, VPC).
+When the user has a Cloud Run image, a Dockerfile they'd
+`gcloud run deploy --source`, or a literal `gcloud run deploy ...`
+invocation they want to run locally, compose `docker run` +
+`p2claw expose` per the mapping in `references/cloud-run-compat.md`.
+That doc has the gcloud → docker flag table, the no-op flags to
+drop (`--region`, `--allow-unauthenticated`, `--platform`,
+scaling/timeouts), what doesn't translate (autoscaling, IAM, custom
+domains, Secret Manager, VPC), and how to bridge secrets via fnox.
 
 ### Apps with secrets
 
@@ -71,9 +70,7 @@ keys from env, point them at **fnox** for the secrets layer rather
 than `.env.local` files or pasted shell vars. The skill ships an
 installer at `scripts/install-fnox.sh` (idempotent; tries
 `mise → brew → cargo → prebuilt binary`). See `references/secrets.md`
-for the integration patterns with the standard `p2claw expose` flow;
-for `p2claw-run` specifically, see `references/cloud-run-compat.md`
-§ *Secrets via fnox*.
+for the integration patterns.
 
 ---
 

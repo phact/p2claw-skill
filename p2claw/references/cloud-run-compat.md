@@ -1,300 +1,202 @@
 ---
 name: cloud-run-compat
 description: |
-  Optional Cloud-Run-compatible deploy mode for the p2claw skill.
-  The `p2claw-run` CLI mirrors `gcloud run deploy` flags so existing
-  Cloud Run containers can run locally over p2claw unchanged. The
-  pitch: swap the binary name, keep the command.
+  Translation guide for running Cloud Run containers locally over
+  p2claw. When the user has a Cloud Run image or a `gcloud run
+  deploy ...` invocation, compose `docker run` + `p2claw expose`
+  per the mapping below.
 ---
 
-# Cloud Run compatibility (`p2claw-run`)
+# Cloud Run containers, locally, over p2claw
 
-`p2claw-run` is a side feature shipped with the p2claw skill. It
-wraps `docker` + `p2claw expose` behind a CLI that accepts the same
-flags as `gcloud run deploy`, so a container built for Cloud Run
-runs locally with no code changes and no new mental model.
-
-The pitch is one line: **rename the binary, keep the command.**
+When the user has an existing Cloud Run service (or a Dockerfile
+they'd otherwise `gcloud run deploy --source` with), the local
+equivalent is two primitives already covered elsewhere in the
+skill:
 
 ```bash
-gcloud run deploy myapp --image gcr.io/proj/myapp --region us-east1 --allow-unauthenticated
-# becomes
-p2claw-run deploy myapp --image gcr.io/proj/myapp --region us-east1 --allow-unauthenticated
+docker run -d --rm --name <name> \
+  -p 127.0.0.1:<host_port>:<container_port> \
+  -e PORT=<container_port> \
+  <image>
+p2claw expose <name> <host_port>
 ```
 
-Both produce a working URL serving the same content. The flags that
-don't translate locally (`--region`, `--allow-unauthenticated`,
-`--platform`) are accepted and ignored — they exist so muscle
-memory works, not because they do anything.
-
----
-
-## When to use this vs. the regular skill flow
-
-The default skill flow (`p2claw expose <name> <port>`) is the right
-choice for almost everything: a dev server you already started, a
-static directory, a `python -m http.server`, etc. It assumes you
-control how the process gets started.
-
-`p2claw-run` is the right choice when:
-
-- You already have a Cloud Run container (or a Dockerfile / source
-  directory that builds one) and want to run it locally without
-  rewriting the deploy step.
-- You want `gcloud run deploy`-style ergonomics: an image reference,
-  a service name, `$PORT` injection, env-var flags.
-- The container is already designed to the Cloud Run contract
-  (stateless, listens on `$PORT`, fast start). If it isn't, fix
-  that before reaching for this mode.
-
-If you're not deploying a container, use the regular skill flow.
+The rest of this doc is mapping `gcloud run deploy` flags onto
+those primitives. No new binary, no new mental model — just a
+translation table the agent applies before running the commands.
 
 ---
 
 ## The container contract
 
-`p2claw-run` honors the parts of the Cloud Run contract that make
-sense locally:
+The Cloud Run image expects to be invoked a specific way. The agent
+honors the parts that make sense locally:
 
-| Cloud Run guarantee | `p2claw-run` behavior |
-|---|---|
-| Container receives `$PORT` env var | Set to `--port` value (default 8080) |
-| Inbound traffic only to `$PORT` | Only the mapped container port is reachable |
-| Stateless | Container is run with `--rm` semantics; local-only labels track ownership |
-| Public HTTPS URL | Yes — via p2claw's edge / WebRTC, same as `p2claw expose` |
-| `--allow-unauthenticated` controls public access | **No-op locally — p2claw URLs are public by default** |
+- **`$PORT` env** — the container reads it to know which port to
+  listen on. Default 8080. Pass `-e PORT=<port>` and map the same
+  `<port>` as the container side of `-p 127.0.0.1:<host>:<port>`.
+- **HTTP, not HTTPS** — TLS terminates at p2claw's edge, not in the
+  container.
+- **Stateless** — `--rm` is fine; no local volumes by default.
+- **`0.0.0.0` bind inside the container** — required for `-p` to
+  reach it. Cloud Run images already do this.
 
-If your container expects to bind a hard-coded port instead of
-reading `$PORT`, pass `--port <that-port>` so `p2claw-run` maps
-correctly and still sets `$PORT` for hygiene.
-
----
-
-## Flag reference
-
-### Build / image
-
-| `gcloud run deploy` | `p2claw-run deploy` | Notes |
-|---|---|---|
-| `--image IMAGE` | `--image IMAGE` | Pulled and run as-is. |
-| `--source PATH` | `--source PATH` | Builds a local image. Uses `Dockerfile` if present, else falls back to Buildpacks via the `pack` CLI. |
-
-### Runtime
-
-| `gcloud run deploy` | `p2claw-run deploy` | Notes |
-|---|---|---|
-| `--port PORT` | `--port PORT` | Default 8080. Injected as `$PORT` and used as the container's listen port. |
-| `--set-env-vars K=V,...` | `--set-env-vars K=V,...` | Comma-separated. Forwarded as `-e K=V` to docker. |
-| `--env-vars-file FILE` | `--env-vars-file FILE` | **Divergence:** Cloud Run expects YAML; `p2claw-run` expects docker env-file syntax (`KEY=value` per line). Use whichever format your local docker workflow already uses. |
-
-### No-ops (accepted for muscle memory, ignored)
-
-| Flag | Why no-op |
-|---|---|
-| `--region` | There's one region: your laptop. |
-| `--allow-unauthenticated` | p2claw URLs are always public. The flag's local moral equivalent is "I understand this is on the public internet" — see the security section in the main SKILL.md. |
-| `--platform` | Managed vs. Anthos vs. GKE doesn't apply here. |
-
-If a flag isn't listed above, `p2claw-run deploy` will reject it
-rather than silently ignore it.
+`<host_port>` and `<container_port>` are usually different.
+`<host_port>` is picked free (see the worked example); `<container_port>`
+comes from `$PORT` (default 8080).
 
 ---
 
-## What this doesn't replicate
+## Flag mapping
 
-`p2claw-run` is a local-dev convenience, not a Cloud Run replacement.
-The following are **not** simulated:
+| `gcloud run deploy` flag | Local equivalent | Notes |
+|---|---|---|
+| `--image IMAGE` | `docker run ... IMAGE` | Pull + run as-is. |
+| `--source PATH` | `docker build -t <tag> PATH && docker run ... <tag>` | If `PATH` has no Dockerfile, fall back to `pack build` (Buildpacks CLI). |
+| `--port PORT` | `-e PORT=<port> -p 127.0.0.1:<host>:<port>` | Default 8080. |
+| `--set-env-vars K=V,...` | `-e K=V` per pair | Comma-split. |
+| `--update-env-vars K=V,...` | Same — re-run `docker run` | No live update; redeploy. |
+| `--env-vars-file FILE` | `--env-file FILE` | docker uses `KEY=value` per line; Cloud Run wants YAML. If the user's file is YAML, either convert it or set each var with `-e`. |
+| `--set-secrets KEY=secret:v` | See *Secrets via fnox* below | No local Secret Manager. |
+| `--region` | (drop) | Local. |
+| `--allow-unauthenticated` | (drop) | p2claw URLs are always public — surface the SKILL.md §Security warnings before exposing. |
+| `--platform` | (drop) | Managed / Anthos / GKE don't apply locally. |
+| `--service-account` | (drop) | No GCP identity injected. If the app needs ADC, the user has to set `GOOGLE_APPLICATION_CREDENTIALS` themselves. |
+| `--cpu`, `--memory` | (drop) | Container gets whatever docker gives it. |
+| `--concurrency`, `--min-instances`, `--max-instances` | (drop) | Single container; no autoscaling. |
+| `--timeout` | (drop) | Not enforced locally. |
+| `--vpc-connector`, `--vpc-egress` | (drop) | Local networking. |
 
-- **Autoscaling.** One container, one instance. No concurrency
-  governor, no cold-start replay, no min/max instances. If you need
-  to test scaling behavior, use Cloud Run.
-- **IAM / service accounts.** No identity is injected; the container
-  has whatever local credentials happen to be in env vars.
-- **Custom domains / domain mappings.** You get the p2claw URL
-  (`https://app-<alias>.p2claw.com/`) and nothing else.
-- **Secret Manager.** No automatic secret injection. Pass secrets as
-  env vars yourself.
-- **VPC connectors / Cloud SQL Auth Proxy.** Local networking only.
-- **Cloud Run timeouts > 60 minutes.** No request-timeout enforcement
-  at all in this mode — it's whatever the container does.
-- **Traffic splitting / revisions.** `p2claw-run deploy NAME` replaces
-  any container running under that name; no rollback target is kept.
+If a flag isn't on this list, ask the user before assuming it has
+no local analog.
 
-If your test plan exercises any of the above, run on actual Cloud
-Run, not here.
+---
+
+## What doesn't translate
+
+- **Autoscaling** — one container, one instance, no concurrency
+  governor, no cold-start replay.
+- **IAM / service accounts** — no GCP identity is injected.
+- **Custom domains / domain mappings** — URL is
+  `https://<name>-<your-alias>.p2claw.com/`.
+- **Secret Manager** — use fnox; see below.
+- **VPC connectors / Cloud SQL Auth Proxy** — local networking only.
+- **Request timeouts > 60 min** — no enforcement at all.
+- **Traffic splitting / revisions** — no rollback target kept.
+
+If the user's test plan exercises any of these, point them at
+actual Cloud Run instead.
 
 ---
 
 ## Secrets via fnox
 
 Cloud Run pulls secrets from Secret Manager via `--set-secrets` /
-`--update-secrets`. There's no local equivalent of Secret Manager,
-and `p2claw-run` deliberately doesn't ship a `--set-secrets` flag
-(it would be a divergence and have nothing real to point at). The
-skill's recommended local secrets layer is
+`--update-secrets`. The local equivalent is
 **[fnox](https://github.com/jdx/fnox)** — see
-`references/secrets.md` for general setup. Install:
+`references/secrets.md` for general setup. Install with:
 
 ```bash
 bash scripts/install-fnox.sh
 ```
 
-Then wrap `p2claw-run` with `fnox exec --` and forward the secrets
-you need into the container via `--set-env-vars`:
+Wrap the docker run with `fnox exec --` and forward the secrets
+into the container by name:
 
 ```bash
-fnox exec -- p2claw-run deploy myapp \
-  --image gcr.io/proj/myapp \
-  --set-env-vars "DATABASE_URL=$DATABASE_URL,STRIPE_KEY=$STRIPE_KEY"
+fnox exec -- docker run -d --rm --name myapp \
+  -p "127.0.0.1:${HOST_PORT}:8080" \
+  -e PORT=8080 \
+  -e DATABASE_URL -e STRIPE_KEY \
+  gcr.io/proj/myapp
 ```
 
-What happens:
+The shape that does the work: `-e KEY` with no `=value` tells
+docker to inherit `KEY` from the parent process's env. `fnox exec`
+decrypts the named secrets into that env; docker pulls only the
+ones the user explicitly forwards. The secrets never touch disk,
+shell history, or `docker inspect` output.
 
-1. `fnox exec` decrypts the secrets named in `fnox.toml` and puts
-   them in the shell that runs `p2claw-run`.
-2. `--set-env-vars` reads `$DATABASE_URL` and `$STRIPE_KEY` from
-   that shell and forwards them as `-e DATABASE_URL=… -e STRIPE_KEY=…`
-   to `docker run`.
-3. The container sees them as plain env, just like under Cloud Run.
-4. When `fnox exec` exits, the parent shell never had them.
-
-### Many secrets: generate a docker env-file on the fly
-
-If enumerating every secret in `--set-env-vars` gets unwieldy:
+For many secrets, generate a docker env-file on the fly:
 
 ```bash
 fnox exec -- bash -c '
-  env | grep -E "^(DATABASE_URL|STRIPE_KEY|SESSION_SECRET|REDIS_URL)=" > .myapp.env
-  p2claw-run deploy myapp --image gcr.io/proj/myapp --env-vars-file .myapp.env
+  env | grep -E "^(DATABASE_URL|STRIPE_KEY|SESSION_SECRET)=" > .myapp.env
+  docker run -d --rm --name myapp \
+    -p "127.0.0.1:${HOST_PORT}:8080" \
+    -e PORT=8080 --env-file .myapp.env \
+    gcr.io/proj/myapp
   rm -f .myapp.env
 '
 ```
 
-The env-file is on disk only for the duration of the deploy
-(`rm -f` at the end). Add `.myapp.env` to `.gitignore` regardless,
-in case the script is interrupted.
-
-### What `p2claw-run` won't do
-
-- **No `--set-secrets KEY=secret:version`.** Cloud Run's syntax
-  references Secret Manager; locally there's no version-pinned
-  store. Use the fnox patterns above.
-- **No auto-forwarding of the shell's entire env.** That would be
-  too noisy (and would leak unrelated env like `PATH`,
-  `HOMEBREW_PREFIX`, …). The user names which secrets to forward.
-- **No injection into the build.** `--source` builds inherit
-  whatever env `docker build` does, which is by design — secrets
-  shouldn't be in image layers. If your build needs a secret,
-  refactor it to read at runtime.
+Never `ENV API_KEY=...` in a Dockerfile — that bakes the secret
+into the image layer forever and ships with every push.
 
 ---
 
 ## Worked example
 
-You have a Cloud Run service `myapp` deployed against
-`gcr.io/proj/myapp`. To run it locally with the same surface area:
+User: "I have a Cloud Run service `myapp` at `gcr.io/proj/myapp`,
+run it locally so I can test it."
+
+Original gcloud command (whatever they're used to typing):
 
 ```bash
-p2claw-run deploy myapp \
+gcloud run deploy myapp \
   --image gcr.io/proj/myapp \
   --region us-east1 \
-  --allow-unauthenticated
+  --allow-unauthenticated \
+  --set-env-vars LOG_LEVEL=debug
 ```
 
-What happens:
-
-1. `--region` and `--allow-unauthenticated` are accepted and ignored.
-2. A free localhost port is picked (say 49213).
-3. The image is run as `docker run -d ... -p 127.0.0.1:49213:8080 -e PORT=8080 gcr.io/proj/myapp`.
-4. `p2claw-run` polls `http://127.0.0.1:49213/` until the container responds.
-5. `p2claw expose myapp 49213` registers the route.
-6. You get `https://myapp-<your-alias>.p2claw.com/`.
-
-Anyone with the URL hits your laptop. Same security caveats as the
-regular skill flow: see "Security" in `SKILL.md`.
-
-### Building from source
+Drop `--region` and `--allow-unauthenticated` (no local analog;
+surface the public-URL security caveat verbally before continuing).
+Translate the rest:
 
 ```bash
-p2claw-run deploy myapp --source ./
+# 1. Pick a free host port.
+HOST_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1])")
+
+# 2. Run the container.
+docker run -d --rm --name myapp \
+  -p "127.0.0.1:${HOST_PORT}:8080" \
+  -e PORT=8080 \
+  -e LOG_LEVEL=debug \
+  gcr.io/proj/myapp
+
+# 3. Wait for it to answer.
+until curl -sS -o /dev/null --max-time 3 "http://127.0.0.1:${HOST_PORT}/"; do
+  sleep 1
+done
+
+# 4. Expose via p2claw.
+p2claw expose myapp "${HOST_PORT}"
 ```
 
-- If `./Dockerfile` exists, runs `docker build`.
-- Else, falls back to Buildpacks: `pack build` against
-  `gcr.io/buildpacks/builder:latest`. Requires the `pack` CLI;
-  install it or commit a Dockerfile.
+If the container has secrets, wrap step 2 with `fnox exec --` and
+add `-e <NAME>` per forwarded var (see *Secrets via fnox* above).
 
-### Env vars
+If the user gave you a `--source PATH` invocation instead of
+`--image`, prepend `docker build -t myapp PATH` (or `pack build
+myapp --path PATH --builder gcr.io/buildpacks/builder:latest` if
+there's no Dockerfile) and use `myapp` as the image in step 2.
+
+---
+
+## Redeploys and cleanup
+
+Same name → replace the running container before re-running:
 
 ```bash
-p2claw-run deploy myapp \
-  --image gcr.io/proj/myapp \
-  --set-env-vars DATABASE_URL=postgres://...,LOG_LEVEL=debug
-
-# or
-p2claw-run deploy myapp --image gcr.io/proj/myapp --env-vars-file ./prod.env
+docker rm -f myapp 2>/dev/null || true
+# … then steps 1-4 again
 ```
 
-`--env-vars-file` expects docker env-file syntax (one `KEY=value`
-per line), not Cloud Run's YAML.
-
----
-
-## Subcommands
+To tear down completely:
 
 ```bash
-p2claw-run services list                  # all p2claw-run services
-p2claw-run services describe NAME         # `docker inspect` for one
-p2claw-run services delete NAME           # stop container + remove route
+docker rm -f myapp 2>/dev/null || true
+p2claw unexpose myapp
 ```
-
-`services list` shows `NAME / IMAGE / STATUS / UPSTREAM` for every
-container labeled by `p2claw-run`. Containers started by raw
-`docker run` aren't included.
-
----
-
-## Implementation surface (what `p2claw-run` actually does)
-
-For people debugging it:
-
-- Container name: `p2claw-run-<service-name>`.
-- Labels on the container: `p2claw-run=true`,
-  `p2claw-run.service=<name>`, `p2claw-run.host-port=<port>`,
-  `p2claw-run.container-port=<port>`, `p2claw-run.image=<image>`.
-- Built source image tag: `p2claw-run/<service-name>:latest`.
-- Health probe: any HTTP response from `http://127.0.0.1:<host-port>/`
-  counts as healthy. 404 is fine. 60 s budget.
-- Route registration: `p2claw expose <name> <host-port> --json --no-qr`,
-  with a fallback to the human form if JSON parsing fails.
-- Redeploys replace the existing container atomically (`docker rm -f`
-  before `docker run`).
-
-No state file, no background daemon — `docker ps --filter
-label=p2claw-run=true` is the source of truth.
-
----
-
-## Dependencies
-
-- `docker` — required for everything.
-- `p2claw` — required for `deploy`'s registration step.
-- `python3` — required for free-port allocation and JSON parsing.
-- `curl` — required for the health probe.
-- `pack` — only required for `--source` without a Dockerfile.
-
-If `--source` doesn't build a Dockerfile and `pack` is missing,
-`p2claw-run` exits with a clear error pointing at either path.
-
----
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `error: agent is not running` from `expose` | p2claw daemon's not up | `p2claw service install` or `p2claw run` (see SKILL.md §"Starting the daemon") |
-| Container exits immediately during deploy | App crashed at startup | `p2claw-run` will surface the last 20 log lines and exit. Fix the app, retry. |
-| `upstream did not respond within 60 s` warning | Slow boot, or app doesn't listen on `$PORT` | The route registers anyway. Check `docker logs p2claw-run-<name>`. |
-| 502 from the public URL | Container is up but not serving | `curl http://127.0.0.1:<port>/` to confirm. If that works, retry — coord may be reconnecting. |
-| `--set-env-vars` value contains a comma | Comma is the delimiter | Use `--env-vars-file` instead. |
-| `services list` is empty after deploy | Container exited and was removed | `docker ps -a` to see exited containers; they self-cleaned. Redeploy. |

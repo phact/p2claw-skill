@@ -86,12 +86,12 @@ parent `fnox exec` — no need to re-wrap for every restart.
 
 ---
 
-## With `p2claw-run` (Cloud Run-compat mode)
+## With docker (Cloud Run containers and similar)
 
 See `references/cloud-run-compat.md` § *Secrets via fnox*. Short
-version: `fnox exec --` wraps `p2claw-run`, and the user enumerates
-which env vars to forward into the container via `--set-env-vars` or
-a generated `--env-vars-file`.
+version: `fnox exec --` wraps `docker run`, and the user names
+which env vars to forward with `-e KEY` (no value — docker pulls
+the value from the parent env where fnox put the secret).
 
 ---
 
