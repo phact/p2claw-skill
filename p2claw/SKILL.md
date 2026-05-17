@@ -63,6 +63,18 @@ ergonomics." See `references/cloud-run-compat.md` for the full flag
 mapping and what isn't replicated (autoscaling, IAM, custom
 domains, Secret Manager, VPC).
 
+### Apps with secrets
+
+p2claw routes traffic; it doesn't manage secrets. If the user's app
+reads API keys, database URLs, OAuth client secrets, or session
+keys from env, point them at **fnox** for the secrets layer rather
+than `.env.local` files or pasted shell vars. The skill ships an
+installer at `scripts/install-fnox.sh` (idempotent; tries
+`mise → brew → cargo → prebuilt binary`). See `references/secrets.md`
+for the integration patterns with the standard `p2claw expose` flow;
+for `p2claw-run` specifically, see `references/cloud-run-compat.md`
+§ *Secrets via fnox*.
+
 ---
 
 ## Security: you are publishing this app to the internet

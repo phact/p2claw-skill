@@ -125,6 +125,70 @@ Run, not here.
 
 ---
 
+## Secrets via fnox
+
+Cloud Run pulls secrets from Secret Manager via `--set-secrets` /
+`--update-secrets`. There's no local equivalent of Secret Manager,
+and `p2claw-run` deliberately doesn't ship a `--set-secrets` flag
+(it would be a divergence and have nothing real to point at). The
+skill's recommended local secrets layer is
+**[fnox](https://github.com/jdx/fnox)** — see
+`references/secrets.md` for general setup. Install:
+
+```bash
+bash scripts/install-fnox.sh
+```
+
+Then wrap `p2claw-run` with `fnox exec --` and forward the secrets
+you need into the container via `--set-env-vars`:
+
+```bash
+fnox exec -- p2claw-run deploy myapp \
+  --image gcr.io/proj/myapp \
+  --set-env-vars "DATABASE_URL=$DATABASE_URL,STRIPE_KEY=$STRIPE_KEY"
+```
+
+What happens:
+
+1. `fnox exec` decrypts the secrets named in `fnox.toml` and puts
+   them in the shell that runs `p2claw-run`.
+2. `--set-env-vars` reads `$DATABASE_URL` and `$STRIPE_KEY` from
+   that shell and forwards them as `-e DATABASE_URL=… -e STRIPE_KEY=…`
+   to `docker run`.
+3. The container sees them as plain env, just like under Cloud Run.
+4. When `fnox exec` exits, the parent shell never had them.
+
+### Many secrets: generate a docker env-file on the fly
+
+If enumerating every secret in `--set-env-vars` gets unwieldy:
+
+```bash
+fnox exec -- bash -c '
+  env | grep -E "^(DATABASE_URL|STRIPE_KEY|SESSION_SECRET|REDIS_URL)=" > .myapp.env
+  p2claw-run deploy myapp --image gcr.io/proj/myapp --env-vars-file .myapp.env
+  rm -f .myapp.env
+'
+```
+
+The env-file is on disk only for the duration of the deploy
+(`rm -f` at the end). Add `.myapp.env` to `.gitignore` regardless,
+in case the script is interrupted.
+
+### What `p2claw-run` won't do
+
+- **No `--set-secrets KEY=secret:version`.** Cloud Run's syntax
+  references Secret Manager; locally there's no version-pinned
+  store. Use the fnox patterns above.
+- **No auto-forwarding of the shell's entire env.** That would be
+  too noisy (and would leak unrelated env like `PATH`,
+  `HOMEBREW_PREFIX`, …). The user names which secrets to forward.
+- **No injection into the build.** `--source` builds inherit
+  whatever env `docker build` does, which is by design — secrets
+  shouldn't be in image layers. If your build needs a secret,
+  refactor it to read at runtime.
+
+---
+
 ## Worked example
 
 You have a Cloud Run service `myapp` deployed against
