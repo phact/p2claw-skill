@@ -56,7 +56,7 @@ Do **not** use it for:
 When the user has a Cloud Run image, a Dockerfile they'd
 `gcloud run deploy --source`, or a literal `gcloud run deploy ...`
 invocation they want to run locally, compose `docker run` +
-`p2claw expose` per the mapping in `references/cloud-run-compat.md`.
+`p2claw apps expose` per the mapping in `references/cloud-run-compat.md`.
 That doc has the gcloud → docker flag table, the no-op flags to
 drop (`--region`, `--allow-unauthenticated`, `--platform`,
 scaling/timeouts), what doesn't translate (autoscaling, IAM, custom
@@ -71,6 +71,13 @@ than `.env.local` files or pasted shell vars. The skill ships an
 installer at `scripts/install-fnox.sh` (idempotent; tries
 `mise → brew → cargo → prebuilt binary`). See `references/secrets.md`
 for the integration patterns.
+
+If the user is reaching for an OAuth client secret *only* to gate
+the audience ("let only my team see this"), the lower-friction
+answer is `--auth-oauth` on the expose — the broker handles the
+OAuth dance and the app never sees a client secret. App-level
+OAuth (Google Sign-In for product reasons, calling Google APIs as
+the user) still needs the client secret via fnox.
 
 ---
 
@@ -87,7 +94,7 @@ from the haiku alias. Exposing `127.0.0.1:5173` via p2claw is, from a
 threat-model standpoint, the same as binding that port to `0.0.0.0`
 and forwarding it through the user's router.
 
-Before calling `p2claw expose`, **state this to the user in plain
+Before calling `p2claw apps expose`, **state this to the user in plain
 language and confirm they want to proceed**, especially if any of
 these apply:
 
@@ -110,9 +117,18 @@ these apply:
   CVEs or unpatched versions.** If you don't know the security
   posture of what's listening on that port, say so.
 
-If the user wants to share something genuinely private, p2claw is the
-wrong tool — recommend a tunnel with auth in front (cloudflared with
-Access, tailscale funnel with ACLs) or just AirDrop/screen-share.
+If the user wants the audience scoped to "people with a sign-in,"
+p2claw ships an OAuth gate in front of the daemon's forwarder
+(v0.8.1+). Pass `--auth-oauth` (optionally with a provider list)
+when registering the route and the daemon refuses to forward
+anything that isn't signed in. See `references/auth.md` for the
+flag, the identity headers the gate passes through, and what the
+gate is and isn't (it's authentication, not authorization, and not
+a substitute for fixing unsafe upstreams).
+
+For *truly* private sharing — air-gapped, no third-party in the
+auth path — p2claw is still the wrong tool; recommend AirDrop, a
+direct screen-share, or a VPN with ACLs.
 
 When in doubt, **ask before exposing**. The cost of a confirmation is
 low; the cost of putting a debug-mode dev server with a database
@@ -272,8 +288,13 @@ P2P fast path. Inbound is unaffected either way.
 Once the daemon is up and the user's app is running on a port:
 
 ```bash
-p2claw expose <name> <port>
+p2claw apps expose --port <port> <name>
 ```
+
+(The flat `p2claw expose <name> <port>` from earlier versions still
+works as a deprecation-window alias, but the `apps` namespace is
+where new knobs like auth live and is the form to use going
+forward.)
 
 Output (example):
 
@@ -291,7 +312,7 @@ Three things you should do with this output:
    typing — surface it.
 2. **Confirm with `curl <upstream-url>`** that the upstream is
    actually answering. The agent does *not* probe the upstream at
-   register time, so a 200 from `expose` only means "the route is
+   register time, so a 200 from expose only means "the route is
    live in the agent," not "your app is up." If `curl
    http://127.0.0.1:<port>/` errors, fix that before telling the user
    the URL works.
@@ -320,13 +341,37 @@ Pick a name that reflects the app: `recipes`, `notes`, `dr-trip`,
 `my-blog`. If the user has a project name, slugify it: `My Recipes` →
 `my-recipes`.
 
+### Gating an app behind sign-in
+
+For routes that shouldn't be open to the whole internet, add
+`--auth-oauth` (optionally with a provider list) to the expose
+call:
+
+```bash
+p2claw apps expose --port 5173 internal-dashboard --auth-oauth
+p2claw apps expose --port 5173 internal-dashboard --auth-oauth github,google
+```
+
+Visitors must sign in through p2claw's broker before the daemon
+forwards anything; the app then receives the verified identity in
+`X-P2claw-User / -Email / -Provider / -Name / -Picture` headers
+(incoming `X-P2claw-*` from clients is always stripped for
+defense-in-depth, so apps can trust them). Unauthenticated requests
+get `401 P2claw-Auth-Required: true` — CLI clients can branch on
+that header to drive re-auth.
+
+See `references/auth.md` for the full flow, the headers, the
+provider-list grammar, and the `apps show / set-auth / clear-auth`
+commands for flipping auth on an existing route without
+re-exposing.
+
 ### Programmatic output
 
 If you need to parse the response (multi-step automation, status
 checks), use `--json`:
 
 ```bash
-p2claw expose recipes 5173 --json
+p2claw apps expose --port 5173 recipes --json
 # {"name":"recipes","url":"https://recipes-honeyed-marble-4155.p2claw.com/","pending_announce":false}
 ```
 
@@ -343,11 +388,19 @@ visits; only the box's listing page is delayed.
 ## Listing and removing routes
 
 ```bash
-p2claw routes              # human table
-p2claw routes --json       # parseable
-p2claw routes --qr         # table + QR per route
-p2claw unexpose <name>     # remove a route (204 / 404)
+p2claw routes                              # human table
+p2claw routes --json                       # parseable; includes "auth": [...] per route
+p2claw routes --qr                         # table + QR per route
+p2claw apps show <name>                    # one route's state (+ --json)
+p2claw apps set-auth <name> --auth-oauth … # change auth methods in place
+p2claw apps clear-auth <name>              # make the route public again
+p2claw unexpose <name>                     # remove a route (204 / 404)
 ```
+
+The default `routes` table doesn't show the auth state. Use
+`--json` (the `auth` array is empty for public routes, populated
+with method specs for gated ones) or `apps show <name>` when the
+agent needs to know whether a route is gated.
 
 Inspect routes before exposing — if the name is already taken, a new
 `expose` will overwrite it. That's the agent's documented behavior
@@ -418,6 +471,9 @@ Pin and disable state live in the agent data dir as
 | `error: bad_upstream` / `non_loopback_upstream` | Upstream isn't `127.0.0.1` / `::1` / `localhost` | Bind your dev server to loopback explicitly (`--bind 127.0.0.1`) |
 | URL returns 502 from a visitor | Upstream isn't running, or crashed | Restart the user's app, run `curl http://127.0.0.1:<port>/` to confirm |
 | URL returns 404 | Wrong route name in URL, or route not registered | `p2claw routes` to inspect |
+| CLI client gets `401 P2claw-Auth-Required: true` | Route is gated with `--auth-oauth` | Sign in via browser at the route URL first; or, if the route should be public, `p2claw apps clear-auth <name>` |
+| Gated route returns `503 P2claw-Auth-Required: true` | Broker JWKS unreachable; daemon failing closed | Transient — retry. If it persists, check coord connectivity in the daemon logs |
+| `error: unknown auth method` on `apps expose` / `apps set-auth` | Provider isn't configured on the broker | Drop the unknown provider from the list (coord-side validation per #154.7) |
 
 ---
 
@@ -431,7 +487,10 @@ User: "Make a quick recipes app and share it with my partner."
    running? Skip to step 5.
 4. Otherwise, install + start service per §"Installing p2claw" and
    §"Starting the daemon".
-5. `p2claw expose recipes 5173`. Read the URL and the QR back.
+5. `p2claw apps expose --port 5173 recipes`. Read the URL and the
+   QR back. If the user wants only specific people to see it (a
+   reviewer, an internal team), add `--auth-oauth` — see §
+   "Gating an app behind sign-in" and `references/auth.md`.
 6. Tell the user the URL is live as long as their box is on. If they
    want it to keep working after a reboot, install as a service (§
    "Starting the daemon" Option A).

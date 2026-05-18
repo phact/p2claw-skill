@@ -3,7 +3,7 @@ name: cloud-run-compat
 description: |
   Translation guide for running Cloud Run containers locally over
   p2claw. When the user has a Cloud Run image or a `gcloud run
-  deploy ...` invocation, compose `docker run` + `p2claw expose`
+  deploy ...` invocation, compose `docker run` + `p2claw apps expose`
   per the mapping below.
 ---
 
@@ -19,7 +19,7 @@ docker run -d --rm --name <name> \
   -p 127.0.0.1:<host_port>:<container_port> \
   -e PORT=<container_port> \
   <image>
-p2claw expose <name> <host_port>
+p2claw apps expose --port <host_port> <name>
 ```
 
 The rest of this doc is mapping `gcloud run deploy` flags onto
@@ -60,7 +60,7 @@ comes from `$PORT` (default 8080).
 | `--env-vars-file FILE` | `--env-file FILE` | docker uses `KEY=value` per line; Cloud Run wants YAML. If the user's file is YAML, either convert it or set each var with `-e`. |
 | `--set-secrets KEY=secret:v` | See *Secrets via fnox* below | No local Secret Manager. |
 | `--region` | (drop) | Local. |
-| `--allow-unauthenticated` | (drop) | p2claw URLs are always public — surface the SKILL.md §Security warnings before exposing. |
+| `--allow-unauthenticated` | (drop) | p2claw URLs are public by default. For "let only signed-in people in" (the local moral equivalent of Cloud Run IAP / `--no-allow-unauthenticated` + IAM), add `--auth-oauth` to the `p2claw apps expose` call — see `references/auth.md`. |
 | `--platform` | (drop) | Managed / Anthos / GKE don't apply locally. |
 | `--service-account` | (drop) | No GCP identity injected. If the app needs ADC, the user has to set `GOOGLE_APPLICATION_CREDENTIALS` themselves. |
 | `--cpu`, `--memory` | (drop) | Container gets whatever docker gives it. |
@@ -172,8 +172,21 @@ until curl -sS -o /dev/null --max-time 3 "http://127.0.0.1:${HOST_PORT}/"; do
 done
 
 # 4. Expose via p2claw.
-p2claw expose myapp "${HOST_PORT}"
+p2claw apps expose --port "${HOST_PORT}" myapp
 ```
+
+If the user's gcloud command had `--no-allow-unauthenticated` (i.e.
+IAP / IAM-gated on Cloud Run), translate that to `--auth-oauth`:
+
+```bash
+p2claw apps expose --port "${HOST_PORT}" myapp --auth-oauth
+# or restrict providers:
+p2claw apps expose --port "${HOST_PORT}" myapp --auth-oauth github,google
+```
+
+Visitors get redirected through p2claw's broker before reaching the
+container; the verified identity arrives in `X-P2claw-*` request
+headers. See `references/auth.md` for the full model.
 
 If the container has secrets, wrap step 2 with `fnox exec --` and
 add `-e <NAME>` per forwarded var (see *Secrets via fnox* above).

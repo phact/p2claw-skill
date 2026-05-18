@@ -4,7 +4,7 @@ description: |
   Secrets management for p2claw apps via fnox. The skill bundles
   `scripts/install-fnox.sh` and recommends `fnox exec --` for
   loading API keys, database URLs, and OAuth secrets into apps
-  exposed over p2claw. Covers both the standard `p2claw expose`
+  exposed over p2claw. Covers both the standard `p2claw apps expose`
   flow and integration points for `p2claw-run` (see
   `references/cloud-run-compat.md` for the Cloud-Run-specific
   patterns).
@@ -64,7 +64,7 @@ secrets."
 
 ---
 
-## With the standard `p2claw expose` flow
+## With the standard `apps expose` flow
 
 For apps the user starts themselves (`npm run dev`,
 `python -m http.server`, a built binary), fnox sits in front of the
@@ -75,7 +75,7 @@ process. p2claw doesn't care:
 fnox exec -- npm run dev          # binds 127.0.0.1:5173 with $DATABASE_URL etc.
 
 # Terminal 2 — expose it
-p2claw expose myapp 5173
+p2claw apps expose --port 5173 myapp
 ```
 
 The agent only sees `127.0.0.1:5173`; the secrets are in the dev
@@ -112,8 +112,15 @@ the value from the parent env where fnox put the secret).
   layer forever. Use `--set-env-vars` / `--env-vars-file` at run
   time, sourced from fnox.
 
-- **OAuth client secrets are secrets too.** When testing an OAuth
-  app behind p2claw, the client secret should come from fnox, not
-  `~/.env.local`. The redirect URI is *not* a secret (it's public
-  by design) but needs to be added to the OAuth provider's
-  allowlist separately.
+- **OAuth client secrets are secrets too.** When the app does its
+  own OAuth (Google Sign-In to call Google APIs as the user, etc.)
+  the client secret should come from fnox, not `~/.env.local`. The
+  redirect URI is *not* a secret (it's public by design) but needs
+  to be added to the OAuth provider's allowlist separately.
+
+- **If the goal is only "let the right people in,"** use the
+  daemon's own auth gate instead of app-level OAuth — pass
+  `--auth-oauth` to `p2claw apps expose` and the broker handles
+  sign-in for you. The app then has no client secret to store and
+  reads identity from `X-P2claw-*` headers. See
+  `references/auth.md`.
