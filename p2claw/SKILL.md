@@ -118,10 +118,10 @@ these apply:
   posture of what's listening on that port, say so.
 
 If the user wants the audience scoped to "people with a sign-in,"
-p2claw ships an OAuth gate in front of the daemon's forwarder
-(v0.8.1+). Pass `--auth-oauth` (optionally with a provider list)
-when registering the route and the daemon refuses to forward
-anything that isn't signed in. See `references/auth.md` for the
+p2claw ships an OAuth gate in front of the daemon's forwarder.
+Pass `--auth-oauth` (optionally with a provider list) when
+registering the route and the daemon refuses to forward anything
+that isn't signed in. See `references/auth.md` for the
 flag, the identity headers the gate passes through, and what the
 gate is and isn't (it's authentication, not authorization, and not
 a substitute for fixing unsafe upstreams).
@@ -291,10 +291,9 @@ Once the daemon is up and the user's app is running on a port:
 p2claw apps expose --port <port> <name>
 ```
 
-(The flat `p2claw expose <name> <port>` from earlier versions still
-works as a deprecation-window alias, but the `apps` namespace is
-where new knobs like auth live and is the form to use going
-forward.)
+(The flat `p2claw expose <name> <port>` form is also accepted as
+an alias; `apps expose` is the canonical form and where per-app
+knobs like auth live.)
 
 Output (example):
 
@@ -473,7 +472,7 @@ Pin and disable state live in the agent data dir as
 | URL returns 404 | Wrong route name in URL, or route not registered | `p2claw routes` to inspect |
 | CLI client gets `401 P2claw-Auth-Required: true` | Route is gated with `--auth-oauth` | Sign in via browser at the route URL first; or, if the route should be public, `p2claw apps clear-auth <name>` |
 | Gated route returns `503 P2claw-Auth-Required: true` | Broker JWKS unreachable; daemon failing closed | Transient — retry. If it persists, check coord connectivity in the daemon logs |
-| `error: unknown auth method` on `apps expose` / `apps set-auth` | Provider isn't configured on the broker | Drop the unknown provider from the list (coord-side validation per #154.7) |
+| `error: unknown auth method` on `apps expose` / `apps set-auth` | Provider isn't configured on the broker | Drop the unknown provider from the list (broker validates at register time) |
 
 ---
 

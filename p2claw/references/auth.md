@@ -11,11 +11,11 @@ description: |
 
 # Auth gate (`--auth-oauth`)
 
-p2claw URLs are public by default. From v0.8.1 onward the daemon
-ships an **identity-aware proxy** in front of each exposed route:
-when an app is registered with `--auth-oauth`, every inbound request
-is gated on a valid session from p2claw's broker before reaching
-the upstream. The verified identity is passed to the upstream in
+p2claw URLs are public by default. The daemon ships an
+**identity-aware proxy** in front of each exposed route: when an
+app is registered with `--auth-oauth`, every inbound request is
+gated on a valid session from p2claw's broker before reaching the
+upstream. The verified identity is passed to the upstream in
 trusted headers.
 
 This is the right tool when the user wants "let only signed-in
@@ -37,8 +37,8 @@ p2claw apps expose --port <PORT> <NAME> --auth-oauth [<PROVIDERS>]
 - `--auth-oauth github,google` → restrict to the listed providers
   (comma-separated, no spaces).
 - Empty list is rejected — omit the value to mean "all configured."
-- Providers are validated coord-side at register time (#154.7); an
-  unknown name fails the expose with a clear error.
+- Providers are validated coord-side at register time; an unknown
+  name fails the expose with a clear error.
 
 To register a public route, omit `--auth-oauth` entirely. The flag
 is per-app, persisted in the daemon's `routes.json`, and announced
@@ -49,7 +49,7 @@ to coord on the next `route_announce`.
 ## How visitors authenticate
 
 1. Visitor opens `https://<name>-<alias>.p2claw.com/`.
-2. The daemon's middleware (#147) checks for a valid session JWT.
+2. The daemon's middleware checks for a valid session JWT.
 3. If absent or invalid → redirected to the broker's sign-in page,
    which lists the providers allowed for this route.
 4. After the OAuth round-trip with the chosen provider, the broker
