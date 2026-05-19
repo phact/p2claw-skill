@@ -88,6 +88,69 @@ esac
 
 TARGET="${OS}-${ARCH}"
 
+# ---------- glibc floor probe (Linux only) ---------------------------
+# Surface a clean "your glibc is too old" message BEFORE the
+# download, rather than letting the user hit a load-time
+# `requires GLIBC_X.YZ` error after install. #142 incident: a
+# release built on ubuntu-24.04 (glibc 2.39) wouldn't load on
+# older container bases (Debian 11, Ubuntu 22.04, RHEL 9); the
+# binary appeared to install fine and then exploded on first
+# exec with no install-script signal. The release pipeline now
+# pins linux runners to ubuntu-22.04 (glibc 2.35), and this
+# probe enforces the matching floor here.
+#
+# Floor is intentionally a bit conservative — bump in lockstep
+# with the matrix.os pin in `.github/workflows/release.yml`.
+#
+# Detection: prefer `getconf GNU_LIBC_VERSION` (POSIX-ish on glibc
+# systems); fall back to parsing `ldd --version`. musl libc lacks
+# both; we skip the check (musl binaries from us would be a
+# separate target entirely, and musl as the host libc means the
+# user is on Alpine or similar — they need the still-future musl
+# build of p2claw, not this glibc one).
+GLIBC_MIN_MAJOR=2
+GLIBC_MIN_MINOR=35
+if [ "$OS" = "linux" ]; then
+  GLIBC_VER=""
+  if command -v getconf >/dev/null 2>&1; then
+    # `getconf GNU_LIBC_VERSION` prints e.g. `glibc 2.35` on glibc;
+    # exits non-zero (or prints nothing) on musl.
+    GLIBC_VER="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+  fi
+  if [ -z "$GLIBC_VER" ] && command -v ldd >/dev/null 2>&1; then
+    # `ldd --version` first line: `ldd (GNU libc) 2.35` (glibc) or
+    # `musl libc (x86_64) Version 1.2.5` (musl). Pull a `M.m` shape
+    # from the first line only.
+    GLIBC_VER="$(ldd --version 2>&1 | head -n1 | grep -oE '[0-9]+\.[0-9]+' | head -n1)"
+    # Disambiguate musl: if the first line contains "musl", clear
+    # GLIBC_VER so we route to the unknown-libc branch instead of
+    # comparing musl's version number against a glibc threshold.
+    if ldd --version 2>&1 | head -n1 | grep -qi musl; then
+      GLIBC_VER=""
+      LIBC_KIND="musl"
+    fi
+  fi
+  if [ -n "$GLIBC_VER" ]; then
+    GLIBC_MAJOR="${GLIBC_VER%%.*}"
+    GLIBC_MINOR="${GLIBC_VER#*.}"
+    GLIBC_MINOR="${GLIBC_MINOR%%.*}"
+    # POSIX integer comparison — major first, then minor.
+    if [ "$GLIBC_MAJOR" -lt "$GLIBC_MIN_MAJOR" ] || \
+       { [ "$GLIBC_MAJOR" -eq "$GLIBC_MIN_MAJOR" ] && [ "$GLIBC_MINOR" -lt "$GLIBC_MIN_MINOR" ]; }; then
+      err "this system's glibc is $GLIBC_VER; p2claw needs glibc ≥${GLIBC_MIN_MAJOR}.${GLIBC_MIN_MINOR}. Upgrade your distro (Debian 12+, Ubuntu 22.04+, RHEL 9+) or run p2claw inside a newer container base."
+    fi
+    say "glibc $GLIBC_VER (≥${GLIBC_MIN_MAJOR}.${GLIBC_MIN_MINOR}, OK)"
+  elif [ "${LIBC_KIND-}" = "musl" ]; then
+    err "this system uses musl libc (Alpine, void-musl, etc). p2claw's published Linux binaries are glibc-only — a musl static build is on the roadmap but not shipped yet. See https://github.com/$REPO for status."
+  else
+    # Neither getconf nor ldd available — rare, but surface a
+    # warning rather than blocking. The agent will hit the
+    # load-time symbol error if the floor is wrong; the user
+    # gets a hint either way.
+    warn "could not detect glibc version (no getconf or ldd on PATH); proceeding anyway. If you hit \`requires GLIBC_…\` on first run, your distro's glibc is too old."
+  fi
+fi
+
 # ---------- prerequisites --------------------------------------------
 require() { command -v "$1" >/dev/null 2>&1 || err "missing dependency: $1"; }
 require curl
@@ -187,15 +250,11 @@ cat <<EOF
 
 ${GRN}p2claw $VERSION ready.${RST}
 
-Recommended next:
+Try it:
 
-  ${BLD}$BIN_NAME service install${RST}              # always-on user-scope service (no sudo)
-  ${BLD}$BIN_NAME expose <name> <port>${RST}     # publish a localhost upstream as a peer URL
-
-Alternatives:
-
-  ${BLD}$BIN_NAME run${RST}                          # foreground daemon (one-off sharing)
-  ${BLD}$BIN_NAME service install --help${RST}       # --system adds MagicDNS for direct-P2P box-to-box
+  ${BLD}$BIN_NAME identity${RST}        # show your peer_id + alias (offline; first run creates the keypair)
+  ${BLD}$BIN_NAME run${RST}             # start the daemon (registers with coord, holds the control connection)
+  ${BLD}$BIN_NAME expose <name> <port>${RST}   # publish a localhost upstream as a peer URL
 
 Docs and skill setup: ${DIM}https://github.com/$REPO${RST}
 EOF
