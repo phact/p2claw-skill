@@ -1,23 +1,35 @@
 # p2claw skill
 
-The agent skill for **[p2claw](https://p2claw.com)** — share apps
-you've built locally as peer-to-peer URLs that anyone with the link
-can open in a browser. Works with any
-[Agent Skills](https://agentskills.io)–compatible coding agent.
+The agent skill for **[p2claw](https://p2claw.com)**: give apps
+running on a machine a peer-to-peer URL, put sign-in in front of
+them, share private apps between machines, and receive email for an
+agent. Works with any [Agent Skills](https://agentskills.io)–compatible
+coding agent.
 
-When you load this skill into your agent and ask it to share an app,
-the agent:
+With this skill loaded, your agent can:
 
-1. Detects whether the `p2claw` binary is already on the machine.
-2. Installs it if not (via the bundled installer, no `sudo`, no
-   global package managers).
-3. Starts the daemon — either as a long-running launchd / systemd
-   user service, or as a foreground process for short-lived sharing.
-4. Registers the route (`name → http://127.0.0.1:<port>`).
-5. Hands you back the public URL and a QR code for your phone.
+- **Publish a local app** at `https://<app>-<alias>.p2claw.com/`,
+  with a QR code for your phone. It installs the `p2claw` binary if
+  needed (bundled installer, no `sudo`), starts the agent as a
+  launchd / systemd user service or in the foreground, registers the
+  app, and checks the upstream answers.
+- **Add sign-in** without registering OAuth apps with Google or
+  GitHub: gate any app with one flag, or configure an app that
+  already supports OIDC (Immich, Grafana, Nextcloud, …) to use the
+  p2claw broker as its login provider. It knows which to pick.
+- **Share private apps between machines**: apps with no public URL,
+  reachable only by the peer ids you share them with, and reach apps
+  other machines have shared with you.
+- **Receive email** at `<alias>@p2claw.com` from allowlisted senders
+  and read it safely: catching up and watching the inbox, treating
+  forwarded mail as data rather than instructions, and leaving the
+  allowlist to the owner.
+- **Drive the agent from code** through its local Unix-socket API and
+  the Python / Node client libraries.
 
 The agent does the work; this skill is the instruction set that tells
-it how. Source for the instructions is [`p2claw/SKILL.md`](./p2claw/SKILL.md).
+it how. The instructions are in [`p2claw/SKILL.md`](./p2claw/SKILL.md),
+with detail in [`p2claw/references/`](./p2claw/references/).
 
 > [!NOTE]
 > p2claw assumes a Bash/POSIX shell and supports macOS + Linux.
@@ -153,7 +165,9 @@ When the agent first runs the bundled installer, it:
 Everything user-managed: `~/.local/bin/p2claw`, the agent's
 `~/Library/Application Support/p2claw/` (macOS) or
 `~/.local/share/p2claw/` (Linux) state directory, and the optional
-launchd plist or systemd unit. Nothing system-wide.
+launchd plist or systemd unit. Nothing system-wide. The agent
+auto-upgrades itself from the p2claw-agent releases; the skill
+documents how to pin or disable that.
 
 ---
 
@@ -174,8 +188,8 @@ of whichever install path you used above).
 
 ## Links
 
-- **Marketing site & docs:** <https://p2claw.com>
+- **Site & docs:** <https://p2claw.com>
 - **Install script (canonical):** <https://p2claw.com/install>
 - **Skill source:** [`p2claw/SKILL.md`](./p2claw/SKILL.md)
-- **Agent source and releases:** <https://github.com/phact/p2claw-agent>
+- **Agent source and releases (MIT):** <https://github.com/phact/p2claw-agent>
 - **Agent Skills spec:** <https://agentskills.io>

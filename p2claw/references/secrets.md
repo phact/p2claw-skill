@@ -4,8 +4,8 @@ description: |
   Secrets management for p2claw apps via fnox. The skill bundles
   `scripts/install-fnox.sh` and recommends `fnox exec --` for
   loading API keys, database URLs, and OAuth secrets into apps
-  exposed over p2claw. Covers both the standard `p2claw apps expose`
-  flow and integration points for `p2claw-run` (see
+  exposed over p2claw. Covers the standard `p2claw apps expose`
+  flow and the docker-based flow (see
   `references/cloud-run-compat.md` for the Cloud-Run-specific
   patterns).
 ---
@@ -75,7 +75,7 @@ process. p2claw doesn't care:
 fnox exec -- npm run dev          # binds 127.0.0.1:5173 with $DATABASE_URL etc.
 
 # Terminal 2 — expose it
-p2claw apps expose --port 5173 myapp
+p2claw apps expose myapp --port 5173
 ```
 
 The agent only sees `127.0.0.1:5173`; the secrets are in the dev
@@ -88,7 +88,7 @@ parent `fnox exec` — no need to re-wrap for every restart.
 
 ## With docker (Cloud Run containers and similar)
 
-See `references/cloud-run-compat.md` § *Secrets via fnox*. Short
+See the *Secrets via fnox* section of `references/cloud-run-compat.md`. Short
 version: `fnox exec --` wraps `docker run`, and the user names
 which env vars to forward with `-e KEY` (no value — docker pulls
 the value from the parent env where fnox put the secret).
@@ -107,10 +107,10 @@ the value from the parent env where fnox put the secret).
   leak the moment you `expose`. fnox keeps them out of *your* code's
   surface area; it can't protect them from your code's bugs.
 
-- **Don't bake secrets into images.** For `p2claw-run`, never
-  `ENV API_KEY=...` in a Dockerfile — that's baked into the image
-  layer forever. Use `--set-env-vars` / `--env-vars-file` at run
-  time, sourced from fnox.
+- **Don't bake secrets into images.** Never `ENV API_KEY=...` in a
+  Dockerfile — that's baked into the image layer forever. Pass
+  secrets at run time with `-e KEY` / `--env-file`, sourced from
+  fnox.
 
 - **OAuth client secrets are secrets too.** When the app does its
   own OAuth (Google Sign-In to call Google APIs as the user, etc.)
@@ -119,8 +119,9 @@ the value from the parent env where fnox put the secret).
   to be added to the OAuth provider's allowlist separately.
 
 - **If the goal is only "let the right people in,"** use the
-  daemon's own auth gate instead of app-level OAuth — pass
+  agent's own sign-in gate instead of app-level OAuth — pass
   `--auth-oauth` to `p2claw apps expose` and the broker handles
   sign-in for you. The app then has no client secret to store and
-  reads identity from `X-P2claw-*` headers. See
-  `references/auth.md`.
+  reads identity from `X-P2claw-*` headers. If the app already has
+  an OIDC login setting, point it at the broker instead; no client
+  secret there either. See `references/auth.md`.

@@ -1,8 +1,8 @@
 {
   "name": "p2claw",
   "owner": { "name": "phact" },
-  "description": "Skills for sharing locally-built apps as peer-to-peer URLs via the p2claw agent.",
-  "version": "0.1.0",
+  "description": "Skills for operating the p2claw agent: public peer-to-peer URLs for local apps, sign-in and OIDC through the p2claw broker, private apps shared between machines, and email for agents.",
+  "version": "0.2.0",
   "repository": "https://github.com/phact/p2claw-skill",
   "license": "MIT-0",
   "plugins": [
@@ -10,11 +10,11 @@
       "name": "p2claw",
       "source": "./p2claw",
       "strict": false,
-      "description": "Publishes apps you've built locally as peer-to-peer URLs anyone can open in a browser.",
-      "version": "0.1.0",
+      "description": "Gives local apps a peer-to-peer URL, puts sign-in in front of them or serves as their OIDC provider, shares private apps between machines, and receives email for agents.",
+      "version": "0.2.0",
       "author": { "name": "phact" },
       "category": "development",
-      "keywords": ["p2p", "share", "deploy", "tunnel", "webrtc", "peer-to-peer"]
+      "keywords": ["p2p", "share", "deploy", "tunnel", "webrtc", "peer-to-peer", "oauth", "oidc", "email", "private-apps"]
     }
   ]
 }

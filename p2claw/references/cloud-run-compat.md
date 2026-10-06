@@ -19,7 +19,7 @@ docker run -d --rm --name <name> \
   -p 127.0.0.1:<host_port>:<container_port> \
   -e PORT=<container_port> \
   <image>
-p2claw apps expose --port <host_port> <name>
+p2claw apps expose <name> --port <host_port>
 ```
 
 The rest of this doc is mapping `gcloud run deploy` flags onto
@@ -172,16 +172,16 @@ until curl -sS -o /dev/null --max-time 3 "http://127.0.0.1:${HOST_PORT}/"; do
 done
 
 # 4. Expose via p2claw.
-p2claw apps expose --port "${HOST_PORT}" myapp
+p2claw apps expose myapp --port "${HOST_PORT}"
 ```
 
 If the user's gcloud command had `--no-allow-unauthenticated` (i.e.
 IAP / IAM-gated on Cloud Run), translate that to `--auth-oauth`:
 
 ```bash
-p2claw apps expose --port "${HOST_PORT}" myapp --auth-oauth
+p2claw apps expose myapp --port "${HOST_PORT}" --auth-oauth
 # or restrict providers:
-p2claw apps expose --port "${HOST_PORT}" myapp --auth-oauth github,google
+p2claw apps expose myapp --port "${HOST_PORT}" --auth-oauth github,google
 ```
 
 Visitors get redirected through p2claw's broker before reaching the
@@ -211,5 +211,5 @@ To tear down completely:
 
 ```bash
 docker rm -f myapp 2>/dev/null || true
-p2claw unexpose myapp
+p2claw apps unexpose myapp
 ```

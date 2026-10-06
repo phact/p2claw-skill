@@ -1,229 +1,205 @@
 ---
 name: auth
 description: |
-  Per-app sign-in gate via the daemon's OAuth broker. Covers the
-  `--auth-oauth` flag on `p2claw apps expose`, the X-P2claw-*
-  identity headers the daemon injects on authenticated requests,
-  defense-in-depth header stripping, the 401/503 +
-  P2claw-Auth-Required affordance for CLI clients, and the
-  `apps show / set-auth / clear-auth` management surface.
+  Sign-in for p2claw apps through the p2claw OAuth broker. Three
+  patterns: the broker as OIDC provider for apps with their own
+  login (recommended when available), the `--auth-oauth` gate at
+  the agent for apps without login, and partial gating with a 401
+  from the app. Identity headers, header stripping, 401/503/501
+  responses, CLI callers, and `apps set-auth / clear-auth`.
 ---
 
-# Auth gate (`--auth-oauth`)
+# Sign-in for p2claw apps
 
-p2claw URLs are public by default. The daemon ships an
-**identity-aware proxy** in front of each exposed route: when an
-app is registered with `--auth-oauth`, every inbound request is
-gated on a valid session from p2claw's broker before reaching the
-upstream. The verified identity is passed to the upstream in
-trusted headers.
+p2claw runs an OAuth broker at `https://oauth.p2claw.com`. It holds
+the Google and GitHub registrations, so neither the user nor the app
+registers an OAuth client with a provider. The broker is used in one
+of three ways, and the choice depends on what the app already has.
 
-This is the right tool when the user wants "let only signed-in
-people see this." It is **not** an app-level OAuth replacement — if
-the app itself needs Google Sign-In / Auth0 / etc. for product
-reasons (linking accounts, calling Google APIs as the user), the
-app keeps doing that. The gate is a layer in front.
-
----
-
-## The flag
-
-```bash
-p2claw apps expose --port <PORT> <NAME> --auth-oauth [<PROVIDERS>]
-```
-
-- `--auth-oauth` with **no value** → any provider the broker has
-  configured is accepted.
-- `--auth-oauth github,google` → restrict to the listed providers
-  (comma-separated, no spaces).
-- Empty list is rejected — omit the value to mean "all configured."
-- Providers are validated coord-side at register time; an unknown
-  name fails the expose with a clear error.
-
-To register a public route, omit `--auth-oauth` entirely. The flag
-is per-app, persisted in the daemon's `routes.json`, and announced
-to coord on the next `route_announce`.
-
----
-
-## How visitors authenticate
-
-1. Visitor opens `https://<name>-<alias>.p2claw.com/`.
-2. The daemon's middleware checks for a valid session JWT.
-3. If absent or invalid → redirected to the broker's sign-in page,
-   which lists the providers allowed for this route.
-4. After the OAuth round-trip with the chosen provider, the broker
-   mints a session JWT and sends the visitor back to the original
-   URL.
-5. The daemon validates the JWT (JWKS pulled from the broker) and
-   forwards the request to the upstream with the identity headers.
-
-The OAuth dance is entirely outside the upstream's process — the
-user's app doesn't run any OAuth code, doesn't see any tokens,
-doesn't need any client IDs or secrets. The app only ever sees
-already-authenticated requests with the headers below.
-
----
-
-## What the app sees on authenticated requests
-
-| Header | Always? | Source |
+| The app… | Use | Result |
 |---|---|---|
-| `X-P2claw-User` | yes | upstream `sub` claim (provider-stable user id) |
-| `X-P2claw-Email` | yes | upstream `email` claim |
-| `X-P2claw-Provider` | yes | issuer name (`github`, `google`, …) |
-| `X-P2claw-Name` | conditional | upstream display name, if provided |
-| `X-P2claw-Picture` | conditional | upstream avatar URL, if provided |
+| has an OIDC / OAuth login setting (Immich, Grafana, Nextcloud, Forgejo, …) | broker as **OIDC provider** | real per-user accounts inside the app |
+| has no login of its own | **gate** at the agent (`--auth-oauth`) | nobody reaches the app without signing in; app reads headers if it cares |
+| needs login on some paths only | **partial gating**: app returns 401 | public routes stay public; protected ones trigger sign-in |
 
-**Defense-in-depth:** incoming `X-P2claw-*` headers from visitors are
-**always stripped** before forwarding, regardless of whether auth
-is on. Apps can trust the headers they receive — there is no path
-for a caller to spoof an identity by setting the header themselves.
-
-Apps should treat `X-P2claw-User` + `X-P2claw-Provider` as the
-identity key (the same email can come from different providers and
-should not be merged silently).
+Prefer the first whenever the app supports it. The gate is the
+fallback for apps that have nothing.
 
 ---
 
-## What unauthenticated callers see
+## 1. Broker as the app's OIDC provider
 
-The daemon responds with:
-
-- `401 P2claw-Auth-Required: true` — visitor has no session, needs
-  to sign in.
-- `503 P2claw-Auth-Required: true` — broker's JWKS is unreachable;
-  the daemon fails closed. Transient.
-
-The `P2claw-Auth-Required: true` response header is stable across
-both cases. CLI clients, webhook senders, and agents calling
-p2claw-exposed APIs can branch on the header to drive
-re-authentication or retry logic without having to parse the
-response body.
-
-Browsers don't need any of this — they get redirected to the broker
-sign-in flow and back, transparently.
-
----
-
-## Flipping auth on or off after expose
+Order matters: **expose first, configure second**. The broker only
+accepts redirect URIs on the app's live p2claw host, so the app's OIDC
+settings won't validate until the app is reachable at
+`https://<app>-<alias>.p2claw.com/`.
 
 ```bash
-p2claw apps show <name>                            # current state (+ --json)
-p2claw apps set-auth <name> --auth-oauth github    # change methods in place
-p2claw apps set-auth <name>                        # clear (same as clear-auth)
-p2claw apps clear-auth <name>                      # explicit clear, route goes public
+p2claw apps expose immich --port 2283      # no --auth-oauth
+p2claw identity                            # copy the peer id
 ```
 
-`set-auth` replaces the method list — pass every provider you want,
-not a delta. `apps show --json` gives the current `auth` array
-suitable for scripting.
+Then in the app's OIDC / OAuth settings:
 
-The daemon persists the change immediately and re-announces to
-coord. Existing sessions stay valid until they expire; the change
-only affects subsequent unauthenticated visitors.
+| Setting | Value |
+|---|---|
+| Issuer / discovery URL | `https://oauth.p2claw.com` |
+| Client ID | this machine's peer id (from `p2claw identity`) |
+| Client secret | leave empty |
+| Token endpoint auth method | `none` (public client with PKCE) |
+| Signing algorithm | `EdDSA` |
+| Scopes | `openid email profile` |
+| Redirect / callback URI | the app's default, on `https://<app>-<alias>.p2claw.com` |
+| External / server URL (if the app has one) | `https://<app>-<alias>.p2claw.com` |
 
----
+Why there is no secret: the client ID is the machine's public key,
+and the broker only delivers logins to URLs that belong to that key.
+Knowing the client ID lets nobody receive the app's logins.
 
-## When to suggest the gate
+Leave the agent-side gate **off** for these apps. The app runs its own
+login page and sessions; adding `--auth-oauth` would force a second
+sign-in and break non-browser clients (mobile apps, API tokens) the
+app supports.
 
-Reach for `--auth-oauth` when **any** of these apply:
-
-- The app exposes data that's only meant for specific people
-  (internal tools, dashboards, draft work, prototypes shown to a
-  named reviewer).
-- The user says "I want only my team / only myself / only my client
-  to see this."
-- The upstream is a dev server with debug mode, hot-reload, source
-  maps, a `/__debug__`-style route, or anything else in the
-  SKILL.md §Security "not safe to expose" list. The gate doesn't
-  fix the underlying risk, but it narrows the attacker pool from
-  "the public internet" to "people who have an OAuth account at one
-  of the allowed providers and the URL."
-- The user is about to expose something that talks to a database,
-  cloud account, or LLM-with-tool-use. Even a gated audience is
-  better than a public one for these.
-
-It is **not** a substitute for fixing dev-mode dangers — a gated
-debug shell is still a debug shell available to anyone in the
-allowed-provider set. Layer with care.
+**Auto-register.** If the app offers "auto register" or "create
+account on first login", anyone who can sign in to the broker with
+Google or GitHub gets an account while it is on. Create accounts up
+front, or enable it only while onboarding, then turn it off.
 
 ---
 
-## What the gate isn't
+## 2. Gate at the agent (`--auth-oauth`)
 
-- **Not authorization.** The gate decides "is this person
-  authenticated" (and via which provider). It does **not** decide
-  "is this person allowed to read this resource." That's the app's
-  job — read `X-P2claw-User` / `X-P2claw-Email` and enforce.
-- **Not app-level OAuth.** If the app needs an OAuth token to call
-  Google APIs / GitHub APIs / etc. *as the user*, the app still
-  runs its own OAuth flow. See `references/secrets.md` for storing
-  the resulting client secret via fnox.
-- **Not a tunnel ACL.** This is HTTP-layer auth on top of the
-  public peer-HTTP transport. The URL itself is still
-  enumerable / shareable; what auth does is make it useless to
-  someone who isn't signed in.
+```bash
+p2claw apps expose <name> --port <port> --auth-oauth
+p2claw apps expose <name> --port <port> --auth-oauth github,google
+```
 
----
+- No value: any provider the broker has configured.
+- Comma-separated list, no spaces: only those providers.
+- `--auth-oauth ""` is rejected. Unknown provider names are rejected
+  at registration.
+- Can't be combined with `--private`.
 
-## Reading the headers (sketch)
+Flow: visitor opens the URL → no valid session → sign-in page listing
+the allowed providers → OAuth with the chosen provider → broker mints a
+session → back to the original URL → the agent validates the session
+against the broker's signing keys and forwards the request with
+identity headers. The app runs no OAuth code and sees no tokens.
 
-Express / Node:
+### Identity headers the app receives
+
+| Header | Present | Value |
+|---|---|---|
+| `X-P2claw-User` | always | stable user id at the provider |
+| `X-P2claw-Email` | always | verified email |
+| `X-P2claw-Provider` | always | `github`, `google`, … |
+| `X-P2claw-Name` | when the provider has one | display name |
+| `X-P2claw-Picture` | when the provider has one | avatar URL |
+
+The agent **always strips** incoming `X-P2claw-*` headers before
+forwarding, on every app, gated or not, and injects them only after
+validating the session on this machine. If the header is present, it
+was verified. Key users by `X-P2claw-User` + `X-P2claw-Provider`; the
+same email can arrive from different providers.
 
 ```js
-app.use((req, res, next) => {
-  const user = req.get('x-p2claw-user');
-  if (!user) return res.status(401).end();
-  req.identity = {
-    id:       user,
-    email:    req.get('x-p2claw-email'),
-    provider: req.get('x-p2claw-provider'),
-    name:     req.get('x-p2claw-name')    || null,
-    picture:  req.get('x-p2claw-picture') || null,
-  };
-  next();
+app.get("/", (req, res) => {
+  res.send(`hello, ${req.headers["x-p2claw-name"] ?? req.headers["x-p2claw-email"]}`);
 });
 ```
 
-Flask:
+### Responses to callers without a session
 
-```python
-from flask import request, abort
+All carry `P2claw-Auth-Required: true` so a client can branch on the
+header without parsing the body:
 
-def identity():
-    user = request.headers.get('X-P2claw-User')
-    if not user:
-        abort(401)
-    return {
-        'id':       user,
-        'email':    request.headers['X-P2claw-Email'],
-        'provider': request.headers['X-P2claw-Provider'],
-        'name':     request.headers.get('X-P2claw-Name'),
-        'picture':  request.headers.get('X-P2claw-Picture'),
-    }
+- `401`: no or invalid session; browsers are sent to sign in
+  automatically, CLI clients see the 401.
+- `503`: the broker's signing keys are unreachable and the agent fails
+  closed. Transient; retry.
+- `501`: the app lists an auth method this agent build doesn't
+  implement. Upgrade the agent on the machine that runs the app.
+
+### Changing the gate on an existing app
+
+```bash
+p2claw apps show <name> [--json]                   # current auth list
+p2claw apps set-auth <name> --auth-oauth github    # replace the list
+p2claw apps set-auth <name>                        # no flag = clear
+p2claw apps clear-auth <name>                      # back to public
 ```
 
-Both assume `--auth-oauth` is in effect for the route. With auth
-off, the headers are absent and you fall back to anonymous handling.
+`set-auth` replaces, so pass every provider wanted. Existing sessions
+stay valid until they expire.
+
+### CLI and non-browser callers of a gated app
+
+The agent accepts the session either as the `__p2claw_session` cookie
+or as `Authorization: Bearer <session token>`; both are stripped
+before the request reaches the app. For unattended access (CI,
+scheduled jobs) the gate is the wrong layer: leave the app public and
+authenticate inside it, or make it private and share it with the
+calling machine (`references/private-apps.md`).
 
 ---
 
-## CLI / agent callers
+## 3. Partial gating from inside the app
 
-For non-browser callers of a gated route, the broker can't run an
-interactive OAuth dance. Two patterns:
+Leave the app public (no `--auth-oauth`). On a path that needs login,
+if `X-P2claw-User` is missing, respond `401` with
+`P2claw-Auth-Required: true`. The browser handles it exactly as it
+does a gated app: sign-in, then back to the same path. From then on
+the visitor's requests to **every** route on the app carry the
+identity headers, because the agent injects identity on public apps
+too whenever the request has a valid session.
 
-1. **Re-auth in browser first**, get a session, then reuse the
-   session cookie / bearer in CLI calls. The broker exposes a
-   user-managed long-lived token for this pattern (see the broker's
-   own docs; outside the daemon CLI's surface).
-2. **Branch on `P2claw-Auth-Required: true`** in the response
-   header. If present, the client knows to prompt the user to
-   reauthenticate via a browser flow rather than retry the same
-   request.
+```js
+app.get("/admin", (req, res) => {
+  if (!req.headers["x-p2claw-user"]) {
+    return res.set("P2claw-Auth-Required", "true").sendStatus(401);
+  }
+  res.send(`welcome, ${req.headers["x-p2claw-email"]}`);
+});
+```
 
-If a CLI workflow requires unattended access (CI, scheduled jobs),
-the gate is the wrong layer — leave the route public and put auth
-inside the app, or scope a separate route without the gate for that
-client.
+```python
+@app.get("/admin")
+def admin():
+    if "X-P2claw-User" not in request.headers:
+        return "", 401, {"P2claw-Auth-Required": "true"}
+    return f"welcome, {request.headers['X-P2claw-Email']}"
+```
+
+On a public app the agent never fails a request on auth machinery: no
+session, a bad session, or an unreachable broker all pass the request
+through untouched (without identity headers).
+
+---
+
+## What the gate is not
+
+- **Not authorization.** It answers "who is this" (and via which
+  provider). Whether that person may do something is the app's
+  decision, made from the headers.
+- **Not a fix for an unsafe upstream.** A gated debug shell is still
+  a debug shell for everyone with a Google account and the link.
+- **Not app-level OAuth.** If the app needs a token to call Google or
+  GitHub APIs *as the user*, it still runs its own OAuth flow and
+  holds its own client secret (`references/secrets.md`).
+- **Not a replacement for the app's own login.** If the app has
+  sessions, a cookie login, or bearer tokens, those keep working
+  unchanged over p2claw. The one visible difference: HTTP Basic auth
+  shows p2claw's sign-in form instead of the browser's native dialog;
+  the credentials still go to the app.
+
+---
+
+## When to suggest a gate
+
+- Internal tools, dashboards, drafts, prototypes for a named
+  reviewer; "only my team / only me / only my client".
+- Anything from the SKILL.md security list that the user insists on
+  exposing anyway: the gate narrows the audience from the internet to
+  signed-in accounts; it does not remove the risk.
+- Apps that talk to databases, cloud accounts, or LLMs with tools.
