@@ -65,8 +65,8 @@ case "$OS_RAW" in
     printf '%sWindows detected — p2claw needs WSL.%s\n' "$YEL" "$RST" >&2
     cat >&2 <<EOF
 
-The p2claw agent's local API + signal handling are POSIX-only
-(docs/local-api-auth.md §3). On Windows, run it under WSL:
+The p2claw agent's local API and signal handling are POSIX-only.
+On Windows, run it under WSL:
 
   1. Install WSL                ${BLD}wsl --install${RST}
   2. Open your Linux distro     (Ubuntu, Debian, …)
@@ -91,13 +91,9 @@ TARGET="${OS}-${ARCH}"
 # ---------- glibc floor probe (Linux only) ---------------------------
 # Surface a clean "your glibc is too old" message BEFORE the
 # download, rather than letting the user hit a load-time
-# `requires GLIBC_X.YZ` error after install. #142 incident: a
-# release built on ubuntu-24.04 (glibc 2.39) wouldn't load on
-# older container bases (Debian 11, Ubuntu 22.04, RHEL 9); the
-# binary appeared to install fine and then exploded on first
-# exec with no install-script signal. The release pipeline now
-# pins linux runners to ubuntu-22.04 (glibc 2.35), and this
-# probe enforces the matching floor here.
+# `requires GLIBC_X.YZ` error after install. Releases are built
+# on Ubuntu 22.04 (glibc 2.35); this probe enforces the same
+# floor.
 #
 # Floor is intentionally a bit conservative — bump in lockstep
 # with the matrix.os pin in `.github/workflows/release.yml`.
