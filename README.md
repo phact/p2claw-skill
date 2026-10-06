@@ -144,7 +144,7 @@ which opens a PR daily if they diverge.
 When the agent first runs the bundled installer, it:
 
 - Detects your OS + arch (macOS aarch64/x86_64, Linux x86_64/aarch64).
-- Downloads the matching binary from this repo's GitHub releases.
+- Downloads the matching binary from the [p2claw-agent](https://github.com/phact/p2claw-agent) releases.
 - Verifies SHA-256 against the published `SHA256SUMS`.
 - Drops the binary at `~/.local/bin/p2claw` (no `sudo`).
 - Optionally registers it as a launchd / systemd `--user` service so
@@ -177,5 +177,5 @@ of whichever install path you used above).
 - **Marketing site & docs:** <https://p2claw.com>
 - **Install script (canonical):** <https://p2claw.com/install>
 - **Skill source:** [`p2claw/SKILL.md`](./p2claw/SKILL.md)
-- **Releases (binary):** <https://github.com/phact/p2claw-skill/releases>
+- **Agent source and releases:** <https://github.com/phact/p2claw-agent>
 - **Agent Skills spec:** <https://agentskills.io>
