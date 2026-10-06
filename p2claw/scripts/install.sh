@@ -16,8 +16,8 @@
 #     GitHub releases, verifies SHA-256 if SHA256SUMS is published,
 #     installs to ~/.local/bin/p2claw (no sudo).
 #   - Windows (MINGW / MSYS / Cygwin): refuses with a clear pointer
-#     to WSL; the agent's UDS local API + signal handling are
-#     POSIX-only (`docs/local-api-auth.md §3`).
+#     to WSL; the agent's Unix-socket local API and signal handling
+#     are POSIX-only.
 #
 # This script is POSIX sh; no bashisms. `set -eu` makes any
 # unhandled failure abort instead of silently moving on.
