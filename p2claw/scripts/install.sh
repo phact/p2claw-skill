@@ -10,10 +10,13 @@
 #   P2CLAW_VERSION       pin to a release tag (e.g. v0.1.0)
 #   P2CLAW_INSTALL_DIR   install destination (default: $HOME/.local/bin)
 #   P2CLAW_REPO          override release source (default: phact/p2claw-agent)
+#   P2CLAW_RELEASE_PUBKEY  release signing key for that source (base64url)
+#   P2CLAW_ALLOW_UNSIGNED  set to 1 to install a release with no signature
 #
 # Behaviour:
 #   - macOS (Darwin) and Linux: downloads the matching binary from
-#     GitHub releases, verifies SHA-256 if SHA256SUMS is published,
+#     GitHub releases, checks the release signature on SHA256SUMS
+#     (where OpenSSL can) and the binary's SHA-256 against it, and
 #     installs to ~/.local/bin/p2claw (no sudo).
 #   - Windows (MINGW / MSYS / Cygwin): refuses with a clear pointer
 #     to WSL; the agent's Unix-socket local API and signal handling
@@ -25,6 +28,7 @@
 set -eu
 
 REPO="${P2CLAW_REPO:-phact/p2claw-agent}"
+RELEASE_PUBKEY="${P2CLAW_RELEASE_PUBKEY:-NS2LhB49a-zuhGR10sOGn6kmSZ9486KxAw0Gb4jaBAE}"
 INSTALL_DIR="${P2CLAW_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${P2CLAW_VERSION:-}"
 BIN_NAME="p2claw"
@@ -159,6 +163,15 @@ elif command -v shasum    >/dev/null 2>&1; then SHA256_CMD="shasum -a 256"
 else SHA256_CMD=""
 fi
 
+# Ed25519 signature checks need OpenSSL 1.1.1 or later (macOS ships
+# LibreSSL, which can't).
+if command -v openssl >/dev/null 2>&1 \
+   && openssl version 2>/dev/null | grep -Eq '^OpenSSL (1\.1\.1|[3-9])'; then
+  CAN_VERIFY_SIG=1
+else
+  CAN_VERIFY_SIG=
+fi
+
 # ---------- resolve version ------------------------------------------
 if [ -z "$VERSION" ]; then
   say "resolving latest release from $REPO …"
@@ -185,23 +198,51 @@ if ! curl -fSL --progress-bar -o "$TMP/$ASSET" "$URL"; then
   err "download failed. Verify that ${BLD}$ASSET${RST} exists at https://github.com/$REPO/releases/$VERSION"
 fi
 
-# ---------- verify checksum (best-effort) -----------------------------
-SUMS_URL="https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS"
-if [ -n "$SHA256_CMD" ] && curl -fsSL -o "$TMP/SHA256SUMS" "$SUMS_URL" 2>/dev/null; then
-  say "verifying SHA-256 …"
-  EXPECTED="$(grep -E "[[:space:]]$ASSET\$" "$TMP/SHA256SUMS" | awk '{print $1}' | head -n1)"
-  if [ -z "$EXPECTED" ]; then
-    warn "SHA256SUMS published but didn't list $ASSET; skipping check"
-  else
-    GOT="$(cd "$TMP" && $SHA256_CMD "$ASSET" | awk '{print $1}')"
-    if [ "$EXPECTED" = "$GOT" ]; then
-      ok "checksum verified"
+# ---------- verify signature + checksum ------------------------------
+# GitHub serves SHA256SUMS next to the binary, so the checksum only
+# means something once SHA256SUMS.sig checks out: a raw Ed25519
+# signature by the p2claw release key over "p2claw-release-v1\n"
+# followed by the SHA256SUMS bytes.
+BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
+curl -fsSL -o "$TMP/SHA256SUMS" "$BASE_URL/SHA256SUMS" 2>/dev/null \
+  || err "$VERSION has no SHA256SUMS; refusing to install an unverifiable release"
+
+if curl -fsSL -o "$TMP/SHA256SUMS.sig" "$BASE_URL/SHA256SUMS.sig" 2>/dev/null; then
+  if [ -n "$CAN_VERIFY_SIG" ]; then
+    say "verifying release signature …"
+    {
+      echo "-----BEGIN PUBLIC KEY-----"
+      echo "MCowBQYDK2VwAyEA$(printf '%s' "$RELEASE_PUBKEY" | tr -- '-_' '+/')="
+      echo "-----END PUBLIC KEY-----"
+    } > "$TMP/release.pem"
+    { printf 'p2claw-release-v1\n'; cat "$TMP/SHA256SUMS"; } > "$TMP/signed"
+    if openssl pkeyutl -verify -pubin -inkey "$TMP/release.pem" -rawin \
+         -in "$TMP/signed" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null 2>&1; then
+      ok "signature verified"
     else
-      err "checksum mismatch (expected $EXPECTED, got $GOT)"
+      err "release signature check failed for $VERSION; not installing"
     fi
+  else
+    warn "can't check the release signature here (needs OpenSSL 1.1.1+); relying on the checksum alone"
+  fi
+elif [ "${P2CLAW_ALLOW_UNSIGNED:-}" = "1" ]; then
+  warn "$VERSION is not signed; installing anyway because P2CLAW_ALLOW_UNSIGNED=1"
+else
+  err "$VERSION is not signed (no SHA256SUMS.sig). Set P2CLAW_ALLOW_UNSIGNED=1 to install it anyway."
+fi
+
+if [ -n "$SHA256_CMD" ]; then
+  say "verifying SHA-256 …"
+  EXPECTED="$(grep -E "[[:space:]]\*?$ASSET\$" "$TMP/SHA256SUMS" | awk '{print $1}' | head -n1)"
+  [ -n "$EXPECTED" ] || err "SHA256SUMS doesn't list $ASSET"
+  GOT="$(cd "$TMP" && $SHA256_CMD "$ASSET" | awk '{print $1}')"
+  if [ "$EXPECTED" = "$GOT" ]; then
+    ok "checksum verified"
+  else
+    err "checksum mismatch (expected $EXPECTED, got $GOT)"
   fi
 else
-  warn "SHA256SUMS not published or no sha256 tool available; skipping integrity check"
+  warn "no sha256 tool available; skipping the checksum"
 fi
 
 # ---------- extract + install ----------------------------------------
